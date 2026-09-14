@@ -340,6 +340,64 @@ def get_fallback_data():
     return stocks
 
 
+DATACENTER_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+HOLDER_COLUMNS = ("SECURITY_CODE,SECURITY_NAME_ABBR,END_DATE,HOLDER_NUM,PRE_HOLDER_NUM,"
+                  "HOLDER_NUM_CHANGE,HOLDER_NUM_RATIO,HOLD_NOTICE_DATE,"
+                  "AVG_MARKET_CAP,TOTAL_MARKET_CAP,INTERVAL_CHRATE")
+
+# 股东户数「存量」分档（用于全市场分布统计）
+# 注意：档位文案不要用 < / >，前端是直接拼进 HTML 的
+HOLDER_BUCKETS = [
+    ("1 万以下", 0, 10000),
+    ("1 万 ~ 5 万", 10000, 50000),
+    ("5 万 ~ 20 万", 50000, 200000),
+    ("20 万以上", 200000, None),
+]
+
+# 分档口径版本号：改了档位定义就 +1，让当天缓存失效重算
+HOLDER_DIST_VERSION = 2
+
+
+def _holder_query(extra, page_size=200, page_number=1):
+    """请求东财数据中心 RPT_HOLDERNUMLATEST（股东户数最新披露表）
+
+    - 接口单页最多返回 500 条，pageSize 传更大也只给 500
+    - 连续请求容易被掐（RemoteDisconnected），因此内置 3 次重试
+    """
+    params = {
+        "reportName": "RPT_HOLDERNUMLATEST",
+        "columns": HOLDER_COLUMNS,
+        "pageSize": str(page_size),
+        "pageNumber": str(page_number),
+        "source": "WEB",
+        "client": "WEB",
+    }
+    params.update(extra)
+    last_err = None
+    for attempt in range(3):
+        try:
+            resp = requests.get(DATACENTER_URL, params=params, headers=EASTMONEY_HEADERS, timeout=25)
+            payload = resp.json()
+            if payload.get("success") is False:
+                raise ValueError(payload.get("message") or "接口返回失败")
+            return (payload.get("result") or {}).get("data") or []
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+    raise last_err
+
+
+def _holder_latest_and_window():
+    """返回 (最新披露日, 有效窗口起点)——窗口 = 最新披露日往前 180 天"""
+    head = _holder_query({"sortColumns": "END_DATE", "sortTypes": "-1"}, page_size=1)
+    latest = (head[0].get("END_DATE") or "")[:10] if head else ""
+    if not latest:
+        raise ValueError("无法获取最新披露日")
+    start = (datetime.strptime(latest, "%Y-%m-%d") - timedelta(days=180)).strftime("%Y-%m-%d")
+    return latest, start
+
+
 def fetch_shareholder_count():
     """从东方财富数据中心获取股东户数变化数据（增幅榜 + 减幅榜）
 
@@ -354,43 +412,17 @@ def fetch_shareholder_count():
        作为窗口，只保留仍在正常披露的股票。
     """
     print("🔍 正在从东方财富获取股东户数变化数据...")
-    url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
-    columns = ("SECURITY_CODE,SECURITY_NAME_ABBR,END_DATE,HOLDER_NUM,PRE_HOLDER_NUM,"
-               "HOLDER_NUM_CHANGE,HOLDER_NUM_RATIO,HOLD_NOTICE_DATE,"
-               "AVG_MARKET_CAP,TOTAL_MARKET_CAP,INTERVAL_CHRATE")
-
-    def _query(extra, page_size=200):
-        params = {
-            "reportName": "RPT_HOLDERNUMLATEST",
-            "columns": columns,
-            "pageSize": str(page_size),
-            "pageNumber": "1",
-            "source": "WEB",
-            "client": "WEB",
-        }
-        params.update(extra)
-        resp = requests.get(url, params=params, headers=EASTMONEY_HEADERS, timeout=20)
-        payload = resp.json()
-        if payload.get("success") is False:
-            raise ValueError(payload.get("message") or "接口返回失败")
-        return (payload.get("result") or {}).get("data") or []
-
     try:
-        # 1) 先探最新披露日，据此计算有效性窗口
-        head = _query({"sortColumns": "END_DATE", "sortTypes": "-1"}, page_size=1)
-        latest = (head[0].get("END_DATE") or "")[:10] if head else ""
-        if not latest:
-            raise ValueError("无法获取最新披露日")
-        window_start = (datetime.strptime(latest, "%Y-%m-%d")
-                        - timedelta(days=180)).strftime("%Y-%m-%d")
+        # 1) 最新披露日 → 有效性窗口
+        latest, window_start = _holder_latest_and_window()
 
         # 2) 有效样本过滤：上期户数 ≥1000（剔除次新股伪比例）+ 当期户数 ≥5000 + 披露日在窗口内
         flt = (f"(PRE_HOLDER_NUM>=1000)(HOLDER_NUM>=5000)"
                f"(END_DATE>='{window_start}')")
 
         # 3) 双向请求：降序 = 增幅榜，升序 = 减幅榜
-        inc_rows = _query({"sortColumns": "HOLDER_NUM_RATIO", "sortTypes": "-1", "filter": flt})
-        dec_rows = _query({"sortColumns": "HOLDER_NUM_RATIO", "sortTypes": "1", "filter": flt})
+        inc_rows = _holder_query({"sortColumns": "HOLDER_NUM_RATIO", "sortTypes": "-1", "filter": flt})
+        dec_rows = _holder_query({"sortColumns": "HOLDER_NUM_RATIO", "sortTypes": "1", "filter": flt})
 
         seen, stocks = set(), []
         for item in inc_rows + dec_rows:
@@ -459,6 +491,97 @@ def _fallback_shareholder_data():
     return fallback
 
 
+def build_holder_distribution(stocks):
+    """全市场股东户数「存量」分布（按户数分档，含各档资金构成）
+
+    与「户数变化榜」不同，这里要的是**存量**：不管涨了还是跌了，只看
+    「每只股票现在有多少户」，据此统计全市场分布。
+
+    - 需要全量拉取（接口单页上限 500 条 → 约 11 页），单次约 1.4MB
+    - 股东户数是季度数据，没必要每 10 分钟重抓 → main() 里做了「同一天复用一次」的缓存
+    - 各档的「资金构成」由当日三档净额按 |净额| 加权算出，用来观察
+      不同户数规模（≈筹码分散程度）的股票，资金结构有没有差别
+    """
+    print("🔍 正在获取全市场股东户数存量分布...")
+    try:
+        latest, window_start = _holder_latest_and_window()
+        flt = f"(HOLDER_NUM>0)(END_DATE>='{window_start}')"
+
+        rows, page = [], 1
+        while page <= 20:
+            batch = _holder_query(
+                {"sortColumns": "HOLDER_NUM", "sortTypes": "-1", "filter": flt},
+                page_size=500, page_number=page)
+            if not batch:
+                break
+            rows.extend(batch)
+            if len(batch) < 500:
+                break
+            page += 1
+        if not rows:
+            raise ValueError("未取到户数数据")
+
+        by_code = {s["code"]: s for s in stocks}
+        total_n = len(rows)
+        total_holders = sum(int(r.get("HOLDER_NUM") or 0) for r in rows)
+
+        buckets = []
+        for label, lo, hi in HOLDER_BUCKETS:
+            grp = [r for r in rows
+                   if lo <= int(r.get("HOLDER_NUM") or 0)
+                   and (hi is None or int(r.get("HOLDER_NUM") or 0) < hi)]
+            if not grp:
+                continue
+            holders = sum(int(r.get("HOLDER_NUM") or 0) for r in grp)
+            # 该档的资金构成：三档 |净额| 加权
+            ra = ma = na = 0.0
+            for r in grp:
+                s = by_code.get(r.get("SECURITY_CODE"))
+                if not s:
+                    continue
+                ra += abs(s.get("retail_net", 0))
+                ma += abs(s.get("medium_net", 0))
+                na += abs(s.get("main_net", 0))
+            tt = ra + ma + na
+            buckets.append({
+                "label": label,
+                "count": len(grp),
+                "count_pct": round(len(grp) / total_n * 100, 1),
+                "holders": holders,
+                "holders_pct": round(holders / total_holders * 100, 1) if total_holders else 0,
+                "retail_pct": round(ra / tt * 100, 1) if tt > 0 else 0,
+                "medium_pct": round(ma / tt * 100, 1) if tt > 0 else 0,
+                "main_pct": round(na / tt * 100, 1) if tt > 0 else 0,
+            })
+
+        print(f"  ✅ 户数存量分布: {total_n} 只 / 总户数 {total_holders/1e8:.2f} 亿，{len(buckets)} 档")
+        return {
+            "version": HOLDER_DIST_VERSION,
+            "total_stocks": total_n,
+            "total_holders": total_holders,
+            "window": f"{window_start} ~ {latest}",
+            "buckets": buckets,
+        }
+    except Exception as e:
+        print(f"  ❌ 户数存量分布抓取失败: {e}")
+        return None
+
+
+def load_today_distribution():
+    """复用当天已抓取的户数分布（季度数据，避免每 10 分钟重复下载全量）"""
+    try:
+        with open(f"{OUTPUT_DIR}/radar_data.json", "r", encoding="utf-8") as f:
+            prev = json.load(f)
+        d = prev.get("holder_distribution") or {}
+        if (d.get("date") == datetime.now().strftime("%Y-%m-%d")
+                and d.get("version") == HOLDER_DIST_VERSION
+                and d.get("buckets")):
+            return d
+    except Exception:
+        pass
+    return None
+
+
 def calc_overview(stocks):
     """计算KPI汇总（三档并列：散户=小单、主力=超大单+大单、中单独立成档）"""
     retail_inflow = [s for s in stocks if s.get("retail_net", 0) > 0]
@@ -521,6 +644,15 @@ def main():
     shareholder_count = fetch_shareholder_count()
     overview = calc_overview(retail_flow)
 
+    # 户数存量分布：季度数据，同一天只抓一次（避免每 10 分钟下载 1.4MB 全量）
+    holder_distribution = load_today_distribution()
+    if holder_distribution:
+        print("  ♻️ 复用当天已抓取的户数存量分布")
+    else:
+        holder_distribution = build_holder_distribution(retail_flow)
+        if holder_distribution:
+            holder_distribution["date"] = datetime.now().strftime("%Y-%m-%d")
+
     status_labels = {"live": "实时数据", "cached": "收盘数据（缓存）", "static": "估算数据"}
     overview["update_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     overview["data_status"] = data_status
@@ -530,6 +662,7 @@ def main():
         "overview": overview,
         "retail_flow": retail_flow,
         "shareholder_count": shareholder_count,
+        "holder_distribution": holder_distribution,
         "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "data_source": "东方财富push2接口" if data_status == "live" else ("缓存数据" if data_status == "cached" else "估算数据"),
         "data_status": data_status,
@@ -553,6 +686,10 @@ def main():
     print(f"📊 三档占比: 散户{ts['retail_pct']}% · 中单{ts['medium_pct']}% · 主力{ts['main_pct']}%（按|净额|之和加权，总和{ts['tier_total']}亿）")
     print(f"📈 四档: 超大单{overview['super_total']}亿 | 大单{overview['large_total']}亿 | 中单{overview['medium_total']}亿 | 小单{overview['small_total']}亿")
     print(f"👥 股东户数: {len(shareholder_count)} 条")
+    if holder_distribution:
+        print(f"📦 户数存量分布: {holder_distribution['total_stocks']} 只 / 总户数 {holder_distribution['total_holders']/1e8:.2f} 亿")
+        for b in holder_distribution["buckets"]:
+            print(f"   {b['label']:<12} {b['count']:>5} 只（{b['count_pct']}%） 户数占比 {b['holders_pct']}% 资金构成 {b['retail_pct']}/{b['medium_pct']}/{b['main_pct']}")
     print("=" * 50)
 
 
