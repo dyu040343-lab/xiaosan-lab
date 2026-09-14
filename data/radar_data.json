@@ -21,7 +21,7 @@
       "tier_total": 2606.71
     },
     "total_stocks": 5913,
-    "update_time": "2026-09-14 07:42:33",
+    "update_time": "2026-09-14 15:51:00",
     "data_status": "live",
     "data_label": "实时数据"
   },
@@ -123477,16 +123477,16 @@
     }
   ],
   "holder_distribution": {
-    "version": 3,
+    "version": 5,
     "total_stocks": 5436,
-    "total_holders": 288190365,
+    "total_holders": 288172254,
     "window": "2026-03-15 ~ 2026-09-11",
     "buckets": [
       {
         "label": "1 万以下",
         "count": 858,
         "count_pct": 15.8,
-        "holders": 5761922,
+        "holders": 5761824,
         "holders_pct": 2.0,
         "retail_pct": 35.9,
         "medium_pct": 26.1,
@@ -123496,7 +123496,7 @@
         "label": "1 万 ~ 5 万",
         "count": 3027,
         "count_pct": 55.7,
-        "holders": 75032213,
+        "holders": 75024008,
         "holders_pct": 26.0,
         "retail_pct": 36.3,
         "medium_pct": 25.3,
@@ -123506,7 +123506,7 @@
         "label": "5 万 ~ 20 万",
         "count": 1328,
         "count_pct": 24.4,
-        "holders": 120614698,
+        "holders": 120604890,
         "holders_pct": 41.9,
         "retail_pct": 37.8,
         "medium_pct": 20.8,
@@ -123523,297 +123523,378 @@
         "main_pct": 47.0
       }
     ],
-    "per_capita": {
+    "ownership": {
+      "period": "2026-06-30",
+      "sample": 5520,
       "min_holders": 5000,
-      "sample": 5255,
-      "retail_top": [
-        {
-          "code": "000638",
-          "name": "*ST万方",
-          "holders": 25056,
-          "avg_market_cap": 16653.02,
-          "avg_hold_num": 12427.62
-        },
-        {
-          "code": "002731",
-          "name": "*ST萃华",
-          "holders": 21346,
-          "avg_market_cap": 19680.31,
-          "avg_hold_num": 12000.19
-        },
-        {
-          "code": "002542",
-          "name": "*ST中岩",
-          "holders": 90622,
-          "avg_market_cap": 22521.15,
-          "avg_hold_num": 19930.22
-        },
-        {
-          "code": "000078",
-          "name": "ST海王",
-          "holders": 149613,
-          "avg_market_cap": 22686.19,
-          "avg_hold_num": 17586.19
-        },
-        {
-          "code": "600868",
-          "name": "梅雁吉祥",
-          "holders": 216244,
-          "avg_market_cap": 23085.64,
-          "avg_hold_num": 8777.81
-        },
-        {
-          "code": "600653",
-          "name": "申华控股",
-          "holders": 124348,
-          "avg_market_cap": 23479.03,
-          "avg_hold_num": 15652.69
-        },
-        {
-          "code": "002717",
-          "name": "*ST岭南",
-          "holders": 73070,
-          "avg_market_cap": 23914.39,
-          "avg_hold_num": 24910.82
-        },
-        {
-          "code": "600187",
-          "name": "*ST国中",
-          "holders": 85429,
-          "avg_market_cap": 25313.03,
-          "avg_hold_num": 18890.32
-        },
-        {
-          "code": "600408",
-          "name": "安泰集团",
-          "holders": 94647,
-          "avg_market_cap": 25317.06,
-          "avg_hold_num": 10637.42
-        },
-        {
-          "code": "000677",
-          "name": "ST海龙",
-          "holders": 48660,
-          "avg_market_cap": 25567.78,
-          "avg_hold_num": 17755.4
-        },
-        {
-          "code": "600734",
-          "name": "*ST实达",
-          "holders": 122507,
-          "avg_market_cap": 27382.82,
-          "avg_hold_num": 17781.05
-        },
-        {
-          "code": "000545",
-          "name": "金浦钛业",
-          "holders": 90602,
-          "avg_market_cap": 28536.93,
-          "avg_hold_num": 10891.96
-        },
-        {
-          "code": "000639",
-          "name": "ST西王",
-          "holders": 40975,
-          "avg_market_cap": 28977.94,
-          "avg_hold_num": 26343.58
-        },
-        {
-          "code": "000816",
-          "name": "智慧农业",
-          "holders": 112267,
-          "avg_market_cap": 29644.78,
-          "avg_hold_num": 12889.04
-        },
-        {
-          "code": "601010",
-          "name": "ST文峰",
-          "holders": 85115,
-          "avg_market_cap": 30179.4,
-          "avg_hold_num": 21711.8
-        },
-        {
-          "code": "002640",
-          "name": "跨境通",
-          "holders": 173867,
-          "avg_market_cap": 30288.55,
-          "avg_hold_num": 8961.11
-        },
-        {
-          "code": "300152",
-          "name": "*ST动力",
-          "holders": 37121,
-          "avg_market_cap": 30915.33,
-          "avg_hold_num": 19202.07
-        },
-        {
-          "code": "600503",
-          "name": "华丽家族",
-          "holders": 102667,
-          "avg_market_cap": 31057.27,
-          "avg_hold_num": 15606.67
-        },
-        {
-          "code": "600340",
-          "name": "*ST华幸",
-          "holders": 139701,
-          "avg_market_cap": 31213.5,
-          "avg_hold_num": 27869.2
-        },
-        {
-          "code": "002514",
-          "name": "*ST宝馨",
-          "holders": 51878,
-          "avg_market_cap": 31228.6,
-          "avg_hold_num": 13879.38
-        }
-      ],
       "main_top": [
         {
-          "code": "688256",
-          "name": "寒武纪",
-          "holders": 58270,
-          "avg_market_cap": 17203927.35,
-          "avg_hold_num": 10782.44
+          "code": "601628",
+          "name": "中国人寿",
+          "inst_pct": 93.64,
+          "legal_pct": 3.4,
+          "retail_pct": 2.95,
+          "orgs": 724,
+          "holders": 131172
+        },
+        {
+          "code": "688796",
+          "name": "百奥赛图",
+          "inst_pct": 62.24,
+          "legal_pct": 0.0,
+          "retail_pct": 37.76,
+          "orgs": 557,
+          "holders": 0
+        },
+        {
+          "code": "000001",
+          "name": "平安银行",
+          "inst_pct": 62.16,
+          "legal_pct": 5.1,
+          "retail_pct": 32.74,
+          "orgs": 720,
+          "holders": 450712
+        },
+        {
+          "code": "688785",
+          "name": "恒运昌",
+          "inst_pct": 43.29,
+          "legal_pct": 2.51,
+          "retail_pct": 54.21,
+          "orgs": 2437,
+          "holders": 9764
+        },
+        {
+          "code": "301362",
+          "name": "民爆光电",
+          "inst_pct": 42.42,
+          "legal_pct": 1.71,
+          "retail_pct": 55.87,
+          "orgs": 210,
+          "holders": 16253
+        },
+        {
+          "code": "300347",
+          "name": "泰格医药",
+          "inst_pct": 39.53,
+          "legal_pct": 4.92,
+          "retail_pct": 55.55,
+          "orgs": 474,
+          "holders": 0
+        },
+        {
+          "code": "688652",
+          "name": "京仪装备",
+          "inst_pct": 39.08,
+          "legal_pct": 18.41,
+          "retail_pct": 42.51,
+          "orgs": 465,
+          "holders": 16380
+        },
+        {
+          "code": "300567",
+          "name": "精测电子",
+          "inst_pct": 37.52,
+          "legal_pct": 6.19,
+          "retail_pct": 56.29,
+          "orgs": 934,
+          "holders": 28335
         },
         {
           "code": "688808",
           "name": "联讯仪器",
-          "holders": 13928,
-          "avg_market_cap": 17118457.84,
-          "avg_hold_num": 7371.24
+          "inst_pct": 37.3,
+          "legal_pct": 3.29,
+          "retail_pct": 59.41,
+          "orgs": 2680,
+          "holders": 13928
         },
         {
-          "code": "688802",
-          "name": "沐曦股份",
-          "holders": 21578,
-          "avg_market_cap": 15358366.39,
-          "avg_hold_num": 18542.03
+          "code": "688548",
+          "name": "广钢气体",
+          "inst_pct": 36.9,
+          "legal_pct": 6.9,
+          "retail_pct": 56.2,
+          "orgs": 529,
+          "holders": 37098
         },
         {
-          "code": "688506",
-          "name": "百利天恒",
-          "holders": 9075,
-          "avg_market_cap": 13377111.67,
-          "avg_hold_num": 45495.74
+          "code": "600610",
+          "name": "中毅达",
+          "inst_pct": 36.8,
+          "legal_pct": 1.98,
+          "retail_pct": 61.21,
+          "orgs": 12,
+          "holders": 0
         },
         {
-          "code": "688836",
-          "name": "宇树科技",
-          "holders": 27666,
-          "avg_market_cap": 12353515.77,
-          "avg_hold_num": 14619.55
+          "code": "688037",
+          "name": "芯源微",
+          "inst_pct": 34.9,
+          "legal_pct": 28.41,
+          "retail_pct": 36.7,
+          "orgs": 790,
+          "holders": 18922
         },
         {
-          "code": "688795",
-          "name": "摩尔线程",
-          "holders": 35520,
-          "avg_market_cap": 9481151.95,
-          "avg_hold_num": 13232.78
-        },
-        {
-          "code": "688200",
-          "name": "华峰测控",
-          "holders": 11253,
-          "avg_market_cap": 9359457.57,
-          "avg_hold_num": 17824.14
-        },
-        {
-          "code": "688361",
-          "name": "中科飞测",
-          "holders": 16558,
-          "avg_market_cap": 9093501.14,
-          "avg_hold_num": 21147.68
-        },
-        {
-          "code": "603268",
-          "name": "松发股份",
-          "holders": 19990,
-          "avg_market_cap": 8979895.56,
-          "avg_hold_num": 50961.33
+          "code": "000061",
+          "name": "农产品",
+          "inst_pct": 34.71,
+          "legal_pct": 34.36,
+          "retail_pct": 30.93,
+          "orgs": 86,
+          "holders": 50027
         },
         {
           "code": "688498",
           "name": "源杰科技",
-          "holders": 26474,
-          "avg_market_cap": 8869370.36,
-          "avg_hold_num": 4702.74
+          "inst_pct": 34.69,
+          "legal_pct": 9.38,
+          "retail_pct": 55.93,
+          "orgs": 1440,
+          "holders": 26474
         },
         {
-          "code": "688082",
-          "name": "盛美上海",
-          "holders": 24268,
-          "avg_market_cap": 8590809.69,
-          "avg_hold_num": 19886.13
+          "code": "688361",
+          "name": "中科飞测",
+          "inst_pct": 34.29,
+          "legal_pct": 28.36,
+          "retail_pct": 37.36,
+          "orgs": 993,
+          "holders": 16558
         },
         {
-          "code": "301377",
-          "name": "鼎泰高科",
-          "holders": 30204,
-          "avg_market_cap": 7503886.42,
-          "avg_hold_num": 13621.14
+          "code": "600383",
+          "name": "金地集团",
+          "inst_pct": 33.99,
+          "legal_pct": 9.82,
+          "retail_pct": 56.19,
+          "orgs": 67,
+          "holders": 91000
         },
         {
-          "code": "688072",
-          "name": "拓荆科技",
-          "holders": 34078,
-          "avg_market_cap": 6901830.68,
-          "avg_hold_num": 8295.47
+          "code": "000012",
+          "name": "南玻A",
+          "inst_pct": 33.87,
+          "legal_pct": 7.81,
+          "retail_pct": 58.32,
+          "orgs": 37,
+          "holders": 106319
         },
         {
-          "code": "300308",
-          "name": "中际旭创",
-          "holders": 205678,
-          "avg_market_cap": 6886239.63,
-          "avg_hold_num": 5422.24
+          "code": "301611",
+          "name": "珂玛科技",
+          "inst_pct": 33.59,
+          "legal_pct": 5.19,
+          "retail_pct": 61.22,
+          "orgs": 527,
+          "holders": 35085
         },
         {
-          "code": "688041",
-          "name": "海光信息",
-          "holders": 133170,
-          "avg_market_cap": 6463185.37,
-          "avg_hold_num": 17453.92
+          "code": "601009",
+          "name": "南京银行",
+          "inst_pct": 33.23,
+          "legal_pct": 44.24,
+          "retail_pct": 22.53,
+          "orgs": 791,
+          "holders": 75439
         },
         {
-          "code": "300750",
-          "name": "宁德时代",
-          "holders": 269979,
-          "avg_market_cap": 6417261.54,
-          "avg_hold_num": 16328.49
+          "code": "300604",
+          "name": "长川科技",
+          "inst_pct": 32.52,
+          "legal_pct": 7.38,
+          "retail_pct": 60.1,
+          "orgs": 1708,
+          "holders": 120196
+        }
+      ],
+      "retail_top": [
+        {
+          "code": "300040",
+          "name": "九洲集团",
+          "inst_pct": 0.0,
+          "legal_pct": 0.0,
+          "retail_pct": 100.0,
+          "orgs": 4,
+          "holders": 49964
         },
         {
-          "code": "920045",
-          "name": "蘅东光",
-          "holders": 6704,
-          "avg_market_cap": 6398055.36,
-          "avg_hold_num": 0.0
+          "code": "920786",
+          "name": "骑士乳业",
+          "inst_pct": 0.0,
+          "legal_pct": 0.0,
+          "retail_pct": 100.0,
+          "orgs": 1,
+          "holders": 8367
         },
         {
-          "code": "002371",
-          "name": "北方华创",
-          "holders": 86222,
-          "avg_market_cap": 6396555.31,
-          "avg_hold_num": 8416.52
+          "code": "603458",
+          "name": "勘设股份",
+          "inst_pct": 0.01,
+          "legal_pct": 0.0,
+          "retail_pct": 99.99,
+          "orgs": 3,
+          "holders": 16350
         },
         {
-          "code": "688801",
-          "name": "燧原科技",
-          "holders": 28885,
-          "avg_market_cap": 5914822.09,
-          "avg_hold_num": 14898.8
+          "code": "603370",
+          "name": "华新精科",
+          "inst_pct": 0.16,
+          "legal_pct": 0.0,
+          "retail_pct": 99.84,
+          "orgs": 221,
+          "holders": 15271
         },
         {
-          "code": "601628",
-          "name": "中国人寿",
-          "holders": 131172,
-          "avg_market_cap": 5611805.76,
-          "avg_hold_num": 158749.81
+          "code": "001239",
+          "name": "永达股份",
+          "inst_pct": 0.17,
+          "legal_pct": 0.0,
+          "retail_pct": 99.83,
+          "orgs": 22,
+          "holders": 16240
+        },
+        {
+          "code": "301076",
+          "name": "新瀚新材",
+          "inst_pct": 0.19,
+          "legal_pct": 0.0,
+          "retail_pct": 99.81,
+          "orgs": 27,
+          "holders": 27700
+        },
+        {
+          "code": "920556",
+          "name": "雅达股份",
+          "inst_pct": 0.22,
+          "legal_pct": 0.0,
+          "retail_pct": 99.78,
+          "orgs": 3,
+          "holders": 6218
+        },
+        {
+          "code": "002599",
+          "name": "盛通股份",
+          "inst_pct": 0.26,
+          "legal_pct": 0.0,
+          "retail_pct": 99.74,
+          "orgs": 16,
+          "holders": 57445
+        },
+        {
+          "code": "300423",
+          "name": "昇辉科技",
+          "inst_pct": 0.28,
+          "legal_pct": 0.0,
+          "retail_pct": 99.72,
+          "orgs": 24,
+          "holders": 24074
+        },
+        {
+          "code": "600405",
+          "name": "动力源",
+          "inst_pct": 0.29,
+          "legal_pct": 0.0,
+          "retail_pct": 99.71,
+          "orgs": 12,
+          "holders": 65483
+        },
+        {
+          "code": "605378",
+          "name": "野马电池",
+          "inst_pct": 0.04,
+          "legal_pct": 0.29,
+          "retail_pct": 99.67,
+          "orgs": 17,
+          "holders": 27658
+        },
+        {
+          "code": "920726",
+          "name": "朱老六",
+          "inst_pct": 0.33,
+          "legal_pct": 0.0,
+          "retail_pct": 99.67,
+          "orgs": 3,
+          "holders": 5509
+        },
+        {
+          "code": "603421",
+          "name": "鼎信通讯",
+          "inst_pct": 0.34,
+          "legal_pct": 0.0,
+          "retail_pct": 99.66,
+          "orgs": 30,
+          "holders": 30479
+        },
+        {
+          "code": "301233",
+          "name": "盛帮股份",
+          "inst_pct": 0.36,
+          "legal_pct": 0.0,
+          "retail_pct": 99.64,
+          "orgs": 25,
+          "holders": 6277
+        },
+        {
+          "code": "300044",
+          "name": "*ST赛为",
+          "inst_pct": 0.0,
+          "legal_pct": 0.37,
+          "retail_pct": 99.63,
+          "orgs": 1,
+          "holders": 34857
+        },
+        {
+          "code": "600512",
+          "name": "腾达建设",
+          "inst_pct": 0.38,
+          "legal_pct": 0.0,
+          "retail_pct": 99.62,
+          "orgs": 20,
+          "holders": 54730
+        },
+        {
+          "code": "002825",
+          "name": "纳尔股份",
+          "inst_pct": 0.38,
+          "legal_pct": 0.0,
+          "retail_pct": 99.62,
+          "orgs": 11,
+          "holders": 18528
+        },
+        {
+          "code": "300221",
+          "name": "银禧科技",
+          "inst_pct": 0.4,
+          "legal_pct": 0.0,
+          "retail_pct": 99.6,
+          "orgs": 16,
+          "holders": 46590
+        },
+        {
+          "code": "002137",
+          "name": "实益达",
+          "inst_pct": 0.07,
+          "legal_pct": 0.35,
+          "retail_pct": 99.59,
+          "orgs": 8,
+          "holders": 82316
+        },
+        {
+          "code": "300303",
+          "name": "聚飞光电",
+          "inst_pct": 0.42,
+          "legal_pct": 0.0,
+          "retail_pct": 99.58,
+          "orgs": 49,
+          "holders": 126336
         }
       ]
     },
     "date": "2026-09-14"
   },
-  "last_updated": "2026-09-14 07:42:33",
+  "last_updated": "2026-09-14 15:51:00",
   "data_source": "东方财富push2接口",
   "data_status": "live"
 }

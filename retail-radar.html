@@ -1229,18 +1229,18 @@ td.code-cell { color: var(--dim); font-size: 10px; }
       </table>
     </div>
     <div class="sh-card">
-      <h4><span class="sh-icon retail"></span>散户扎堆 TOP <span class="sh-hint">户均市值最低</span></h4>
+      <h4><span class="sh-icon retail"></span>散户扎堆 TOP <span class="sh-hint">散户占流通比最高</span></h4>
       <table class="sh-table">
-        <thead><tr><th style="text-align:left">股票</th><th>股东户数</th><th>户均市值</th><th>户均持股</th></tr></thead>
+        <thead><tr><th style="text-align:left">股票</th><th>散户及其他</th><th>主力(机构)</th><th>股东户数</th></tr></thead>
         <tbody id="holderRetailBody">
           <tr><td colspan="4" style="text-align:center;color:var(--dim)">加载中...</td></tr>
         </tbody>
       </table>
     </div>
     <div class="sh-card">
-      <h4><span class="sh-icon main"></span>主力控盘 TOP <span class="sh-hint">户均市值最高</span></h4>
+      <h4><span class="sh-icon main"></span>主力控盘 TOP <span class="sh-hint">主力占流通比最高</span></h4>
       <table class="sh-table">
-        <thead><tr><th style="text-align:left">股票</th><th>股东户数</th><th>户均市值</th><th>户均持股</th></tr></thead>
+        <thead><tr><th style="text-align:left">股票</th><th>主力(机构)</th><th>大股东法人</th><th>散户及其他</th></tr></thead>
         <tbody id="holderMainBody">
           <tr><td colspan="4" style="text-align:center;color:var(--dim)">加载中...</td></tr>
         </tbody>
@@ -1595,47 +1595,41 @@ function fmtHolders(n) {
   return String(n);
 }
 
-// 金额（元）→ 亿 / 万
-function fmtMoney(v) {
-  v = v || 0;
-  if (v >= 1e8) return (v / 1e8).toFixed(2) + ' 亿';
-  if (v >= 1e4) return (v / 1e4).toFixed(1) + ' 万';
-  return v.toFixed(0);
-}
-
-// 户均持股市值榜：低 = 账户小且散（散户扎堆），高 = 筹码集中在大账户（主力/机构控盘）
+// 持股结构榜：主力（投资机构）/ 大股东法人 / 散户及其他 —— 占流通股比，与股价无关
 function renderHolderPerCapita() {
   const d = allData && allData.holder_distribution;
-  const pc = d && d.per_capita;
+  const ow = d && d.ownership;
+  const pct = (v, color) => '<td style="text-align:right;color:' + color + '">' + (v || 0).toFixed(2) + '%</td>';
+  // 两张卡侧重点不同：散户榜所有值都接近 100%，靠「股东户数」区分，所以把户数列出来
   const groups = {
-    holderRetailBody: pc && pc.retail_top,
-    holderMainBody: pc && pc.main_top,
+    holderRetailBody: (ow && ow.retail_top) ? ow.retail_top.map(x =>
+      '<tr><td class="name-cell">' + x.name + '</td>'
+      + pct(x.retail_pct, 'var(--red)')
+      + pct(x.inst_pct, 'var(--blue)')
+      + '<td style="text-align:right;color:var(--dim)">' + fmtHolders(x.holders) + '</td></tr>') : null,
+    holderMainBody: (ow && ow.main_top) ? ow.main_top.map(x =>
+      '<tr><td class="name-cell">' + x.name + '</td>'
+      + pct(x.inst_pct, 'var(--blue)')
+      + pct(x.legal_pct, 'var(--dim)')
+      + pct(x.retail_pct, 'var(--red)') + '</tr>') : null,
   };
   for (const id of Object.keys(groups)) {
     const el = document.getElementById(id);
     if (!el) continue;
-    const list = groups[id];
-    if (!list || !list.length) {
-      el.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--dim)">暂无数据</td></tr>';
-      continue;
-    }
-    let html = '';
-    for (const x of list) {
-      html += '<tr>' +
-        '<td class="name-cell">' + x.name + '</td>' +
-        '<td style="text-align:right">' + fmtHolders(x.holders) + '</td>' +
-        '<td style="text-align:right">' + fmtMoney(x.avg_market_cap) + '</td>' +
-        '<td style="text-align:right">' + (x.avg_hold_num > 0 ? Math.round(x.avg_hold_num).toLocaleString() + ' 股' : '--') + '</td>' +
-      '</tr>';
-    }
-    el.innerHTML = html;
+    const rows = groups[id];
+    el.innerHTML = (rows && rows.length)
+      ? rows.join('')
+      : '<tr><td colspan="4" style="text-align:center;color:var(--dim)">暂无数据</td></tr>';
   }
   const note = document.getElementById('holderPerCapitaNote');
   if (note) {
-    note.textContent = pc
-      ? '口径说明：东财不披露「主力 / 散户」的户数拆分，这里用「户均持股市值」（总市值 ÷ 股东户数）衡量账户结构 —— 越低说明账户越小越散（散户扎堆），越高说明筹码越集中在大账户。'
-        + '可排样本 ' + pc.sample.toLocaleString() + ' 只（股东户数 ≥ ' + pc.min_holders.toLocaleString() + '）。'
-        + '注意：户均市值同时受股价与大股东持股影响，低价股 / 小盘股天然偏低，它是「账户规模」指标，不等同于资金流口径的主力 / 散户。'
+    note.textContent = ow
+      ? '口径说明：数据来自东财「机构持股」（报告期 ' + ow.period + '），按占流通股比例拆成三段 —— '
+        + '主力 = 公募基金 + QFII + 社保 + 券商 + 保险 + 信托 等投资机构；大股东法人 = 产业资本 / 一般法人；散户及其他 = 其余未列入机构名单的账户。三段相加约等于 100%。'
+        + '可统计 ' + ow.sample.toLocaleString() + ' 只。'
+        + '这才是与股价无关的「占比」：主力占流通比越高说明筹码越集中在机构手里，散户及其他越高说明越散。'
+        + '注意三点：① 季度披露的持股快照，不是实时；② 若控股股东本身是保险 / 金融机构，会被计入「主力」而偏高（如中国人寿）；'
+        + '③ 大量小票的散户占比正好是 100%，散户榜已剔除数据自相矛盾的记录（有机构家数却占流通比为 0），并按股东户数做二次排序（户数 ≥ ' + ow.min_holders.toLocaleString() + '）。'
       : '';
   }
 }

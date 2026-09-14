@@ -354,12 +354,14 @@ HOLDER_BUCKETS = [
     ("20 万以上", 200000, None),
 ]
 
-# 分档口径版本号：改了档位定义就 +1，让当天缓存失效重算
-HOLDER_DIST_VERSION = 3
+# 分档口径版本号：改了结构就 +1，让当天缓存失效重算
+HOLDER_DIST_VERSION = 5
 
-# 「散户扎堆 / 主力控盘」榜单：户均持股市值排序，最小户数门槛
-PERCAPITA_MIN_HOLDERS = 5000
-PERCAPITA_TOP_N = 20
+# 机构持股结构（主力 / 大股东法人 / 散户）榜单
+OWNERSHIP_TOP_N = 20
+OWNERSHIP_MIN_HOLDERS = 5000   # 散户扎堆榜的最低股东户数（用于剔除并列噪声并做二次排序）
+ORGHOLD_ORG_TOTAL = "00"   # 机构汇总 = 机构 + 一般法人 合计占流通股比
+ORGHOLD_ORG_LEGAL = "07"   # 其他 = 一般法人（大股东 / 产业资本）占流通股比
 
 
 def _holder_query(extra, page_size=200, page_number=1):
@@ -495,6 +497,124 @@ def _fallback_shareholder_data():
     return fallback
 
 
+def _orghold_query(extra, page_size=500, page_number=1):
+    """请求东财数据中心 RPT_MAIN_ORGHOLD（机构持股，季度披露）"""
+    params = {
+        "reportName": "RPT_MAIN_ORGHOLD",
+        "columns": ("SECURITY_CODE,SECURITY_NAME_ABBR,REPORT_DATE,ORG_TYPE,ORG_TYPE_NAME,"
+                    "HOULD_NUM,TOTAL_SHARES,FREESHARES_RATIO,TOTALSHARES_RATIO"),
+        "pageSize": str(page_size),
+        "pageNumber": str(page_number),
+        "source": "WEB",
+        "client": "WEB",
+    }
+    params.update(extra)
+    last_err = None
+    for attempt in range(3):
+        try:
+            resp = requests.get(DATACENTER_URL, params=params, headers=EASTMONEY_HEADERS, timeout=25)
+            payload = resp.json()
+            if payload.get("success") is False:
+                raise ValueError(payload.get("message") or "接口返回失败")
+            return (payload.get("result") or {}).get("data") or []
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+    raise last_err
+
+
+def build_ownership_structure(by_code, holders_map):
+    """主力 / 大股东法人 / 散户及其他 —— 三段持股结构（占流通股比）
+
+    数据源：东财数据中心 RPT_MAIN_ORGHOLD（机构持股，季度披露）。
+    这才是真正的「占比」——它是持股比例，与股价无关，能用来看筹码在谁手里：
+
+    - `ORG_TYPE="00"` 机构汇总 → 机构 + 一般法人 合计占流通股比
+    - `ORG_TYPE="07"` 其他     → 一般法人（大股东 / 产业资本）占流通股比
+    - **主力（投资机构）= 汇总 − 其他**（即 基金 + QFII + 社保 + 券商 + 保险 + 信托）
+    - **散户及其他 = 100 − 汇总**（未披露在机构名单里的账户，绝大多数是散户）
+    """
+    print("🔍 正在获取机构持股结构（主力/法人/散户）...")
+    try:
+        head = _orghold_query({"sortColumns": "REPORT_DATE", "sortTypes": "-1"}, page_size=1)
+        period = (head[0].get("REPORT_DATE") or "")[:10] if head else ""
+        if not period:
+            raise ValueError("无法获取最新报告期")
+        flt = f"(REPORT_DATE='{period}')"
+
+        total_rows, legal_rows = [], []
+        for org_type, bucket in ((ORGHOLD_ORG_TOTAL, total_rows), (ORGHOLD_ORG_LEGAL, legal_rows)):
+            page = 1
+            while page <= 20:
+                batch = _orghold_query(
+                    {"filter": flt + f'(ORG_TYPE="{org_type}")',
+                     "sortColumns": "SECURITY_CODE", "sortTypes": "1"},
+                    page_size=500, page_number=page)
+                if not batch:
+                    break
+                bucket.extend(batch)
+                if len(batch) < 500:
+                    break
+                page += 1
+
+        if not total_rows:
+            raise ValueError("未取到机构汇总数据")
+
+        legal_by_code = {}
+        for r in legal_rows:
+            legal_by_code[r.get("SECURITY_CODE")] = float(r.get("FREESHARES_RATIO") or 0)
+
+        items = []
+        for r in total_rows:
+            code = r.get("SECURITY_CODE")
+            if code not in by_code:
+                continue
+            total = r.get("FREESHARES_RATIO")
+            if total is None:
+                continue
+            total = float(total)
+            legal = legal_by_code.get(code, 0.0)
+            if not (0 <= total <= 100.5) or not (0 <= legal <= 100.5):
+                continue
+            items.append({
+                "code": code,
+                "name": (r.get("SECURITY_NAME_ABBR") or "").strip(),
+                "inst_pct": round(max(total - legal, 0.0), 2),
+                "legal_pct": round(legal, 2),
+                "retail_pct": round(max(100 - total, 0.0), 2),
+                "orgs": int(r.get("HOULD_NUM") or 0),
+                "holders": holders_map.get(code, 0),
+            })
+
+        if not items:
+            raise ValueError("聚合后无有效样本")
+
+        # 主力控盘：机构投资占比最高
+        main_top = sorted(items, key=lambda x: (-x["inst_pct"], -x["orgs"]))[:OWNERSHIP_TOP_N]
+        # 散户扎堆：散户占比最高。大量小票的散户占比正好是 100%，会挤成一大片并列，
+        # 所以先剔除两类噪声，再用「股东户数」做二次排序（户数越多越散）：
+        #   ① 有机构家数却占流通比为 0 —— 东财数据自相矛盾（次新股 / 流通股未定义）
+        #   ② 没有股东户数记录 —— 无法判断真实分散程度
+        pool = [x for x in items
+                if x["holders"] >= OWNERSHIP_MIN_HOLDERS
+                and not (x["inst_pct"] + x["legal_pct"] <= 0.0001 and x["orgs"] >= 5)]
+        retail_top = sorted(pool, key=lambda x: (-x["retail_pct"], -x["holders"]))[:OWNERSHIP_TOP_N]
+
+        print(f"  ✅ 持股结构 [{period}] {len(items)} 只｜主力最高 {main_top[0]['name']} {main_top[0]['inst_pct']}%"
+              f"｜散户最高 {retail_top[0]['name']} {retail_top[0]['retail_pct']}%（户数 {retail_top[0]['holders']:,}）")
+        return {
+            "period": period,
+            "sample": len(items),
+            "min_holders": OWNERSHIP_MIN_HOLDERS,
+            "main_top": main_top,
+            "retail_top": retail_top,
+        }
+    except Exception as e:
+        print(f"  ❌ 持股结构抓取失败: {e}")
+        return None
+
+
 def build_holder_distribution(stocks):
     """全市场股东户数「存量」分布（按户数分档，含各档资金构成）
 
@@ -560,35 +680,9 @@ def build_holder_distribution(stocks):
 
         print(f"  ✅ 户数存量分布: {total_n} 只 / 总户数 {total_holders/1e8:.2f} 亿，{len(buckets)} 档")
 
-        # 户均持股市值榜：低 = 一堆小账户（散户扎堆）；高 = 少而大的账户（主力/机构控盘）
-        # 口径说明：东财没有「主力/散户户数」这种拆分，户均是唯一能反映账户结构的真实指标
-        cands = []
-        for r in rows:
-            code = r.get("SECURITY_CODE")
-            if code not in by_code:
-                continue
-            holders = int(r.get("HOLDER_NUM") or 0)
-            avg_cap = float(r.get("AVG_MARKET_CAP") or 0)
-            if holders < PERCAPITA_MIN_HOLDERS or avg_cap <= 0:
-                continue
-            cands.append({
-                "code": code,
-                "name": (r.get("SECURITY_NAME_ABBR") or "").strip(),
-                "holders": holders,
-                "avg_market_cap": round(avg_cap, 2),
-                "avg_hold_num": round(float(r.get("AVG_HOLD_NUM") or 0), 2),
-            })
-        by_cap = sorted(cands, key=lambda x: x["avg_market_cap"])
-        per_capita = {
-            "min_holders": PERCAPITA_MIN_HOLDERS,
-            "sample": len(cands),
-            "retail_top": by_cap[:PERCAPITA_TOP_N],
-            "main_top": list(reversed(by_cap[-PERCAPITA_TOP_N:])),
-        }
-        if per_capita["retail_top"]:
-            lo = per_capita["retail_top"][0]
-            hi = per_capita["main_top"][0]
-            print(f"  ✅ 户均市值榜: {len(cands)} 只可排｜最散户 {lo['name']} {lo['avg_market_cap']/1e4:.1f}万｜最主力 {hi['name']} {hi['avg_market_cap']/1e4:.1f}万")
+        # 主力 / 大股东法人 / 散户及其他 —— 三段持股结构（真正的占比，与股价无关）
+        holders_map = {r.get("SECURITY_CODE"): int(r.get("HOLDER_NUM") or 0) for r in rows}
+        ownership = build_ownership_structure(by_code, holders_map)
 
         return {
             "version": HOLDER_DIST_VERSION,
@@ -596,7 +690,7 @@ def build_holder_distribution(stocks):
             "total_holders": total_holders,
             "window": f"{window_start} ~ {latest}",
             "buckets": buckets,
-            "per_capita": per_capita,
+            "ownership": ownership,
         }
     except Exception as e:
         print(f"  ❌ 户数存量分布抓取失败: {e}")
