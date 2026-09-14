@@ -343,7 +343,7 @@ def get_fallback_data():
 DATACENTER_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 HOLDER_COLUMNS = ("SECURITY_CODE,SECURITY_NAME_ABBR,END_DATE,HOLDER_NUM,PRE_HOLDER_NUM,"
                   "HOLDER_NUM_CHANGE,HOLDER_NUM_RATIO,HOLD_NOTICE_DATE,"
-                  "AVG_MARKET_CAP,TOTAL_MARKET_CAP,INTERVAL_CHRATE")
+                  "AVG_MARKET_CAP,AVG_HOLD_NUM,TOTAL_MARKET_CAP,INTERVAL_CHRATE")
 
 # 股东户数「存量」分档（用于全市场分布统计）
 # 注意：档位文案不要用 < / >，前端是直接拼进 HTML 的
@@ -355,7 +355,11 @@ HOLDER_BUCKETS = [
 ]
 
 # 分档口径版本号：改了档位定义就 +1，让当天缓存失效重算
-HOLDER_DIST_VERSION = 2
+HOLDER_DIST_VERSION = 3
+
+# 「散户扎堆 / 主力控盘」榜单：户均持股市值排序，最小户数门槛
+PERCAPITA_MIN_HOLDERS = 5000
+PERCAPITA_TOP_N = 20
 
 
 def _holder_query(extra, page_size=200, page_number=1):
@@ -555,12 +559,44 @@ def build_holder_distribution(stocks):
             })
 
         print(f"  ✅ 户数存量分布: {total_n} 只 / 总户数 {total_holders/1e8:.2f} 亿，{len(buckets)} 档")
+
+        # 户均持股市值榜：低 = 一堆小账户（散户扎堆）；高 = 少而大的账户（主力/机构控盘）
+        # 口径说明：东财没有「主力/散户户数」这种拆分，户均是唯一能反映账户结构的真实指标
+        cands = []
+        for r in rows:
+            code = r.get("SECURITY_CODE")
+            if code not in by_code:
+                continue
+            holders = int(r.get("HOLDER_NUM") or 0)
+            avg_cap = float(r.get("AVG_MARKET_CAP") or 0)
+            if holders < PERCAPITA_MIN_HOLDERS or avg_cap <= 0:
+                continue
+            cands.append({
+                "code": code,
+                "name": (r.get("SECURITY_NAME_ABBR") or "").strip(),
+                "holders": holders,
+                "avg_market_cap": round(avg_cap, 2),
+                "avg_hold_num": round(float(r.get("AVG_HOLD_NUM") or 0), 2),
+            })
+        by_cap = sorted(cands, key=lambda x: x["avg_market_cap"])
+        per_capita = {
+            "min_holders": PERCAPITA_MIN_HOLDERS,
+            "sample": len(cands),
+            "retail_top": by_cap[:PERCAPITA_TOP_N],
+            "main_top": list(reversed(by_cap[-PERCAPITA_TOP_N:])),
+        }
+        if per_capita["retail_top"]:
+            lo = per_capita["retail_top"][0]
+            hi = per_capita["main_top"][0]
+            print(f"  ✅ 户均市值榜: {len(cands)} 只可排｜最散户 {lo['name']} {lo['avg_market_cap']/1e4:.1f}万｜最主力 {hi['name']} {hi['avg_market_cap']/1e4:.1f}万")
+
         return {
             "version": HOLDER_DIST_VERSION,
             "total_stocks": total_n,
             "total_holders": total_holders,
             "window": f"{window_start} ~ {latest}",
             "buckets": buckets,
+            "per_capita": per_capita,
         }
     except Exception as e:
         print(f"  ❌ 户数存量分布抓取失败: {e}")

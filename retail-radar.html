@@ -826,6 +826,23 @@ td.code-cell { color: var(--dim); font-size: 10px; }
 
 .sh-card h4 .sh-icon.up { background: var(--red); box-shadow: 0 0 6px var(--red); }
 .sh-card h4 .sh-icon.down { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.sh-card h4 .sh-icon.retail { background: var(--red); box-shadow: 0 0 6px var(--red); }
+.sh-card h4 .sh-icon.main { background: var(--blue); box-shadow: 0 0 6px var(--blue); }
+.sh-card h4 .sh-hint {
+  font-size: 9px;
+  font-weight: 400;
+  color: var(--dim);
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0;
+}
+
+.holder-note {
+  margin: 10px 2px 0;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--dim);
+  font-family: 'Noto Sans SC', sans-serif;
+}
 
 .sh-table {
   width: 100%;
@@ -1188,7 +1205,7 @@ td.code-cell { color: var(--dim); font-size: 10px; }
 
   <!-- ═══════ Quarterly Section ═══════ -->
   <div class="section-header">
-    <h2>股东户数变化</h2>
+    <h2>股东户数</h2>
     <span class="freq-tag quarterly"><span class="freq-tag-dot"></span>季度披露 · 上市公司定期公告</span>
   </div>
 
@@ -1211,7 +1228,27 @@ td.code-cell { color: var(--dim); font-size: 10px; }
         </tbody>
       </table>
     </div>
+    <div class="sh-card">
+      <h4><span class="sh-icon retail"></span>散户扎堆 TOP <span class="sh-hint">户均市值最低</span></h4>
+      <table class="sh-table">
+        <thead><tr><th style="text-align:left">股票</th><th>股东户数</th><th>户均市值</th><th>户均持股</th></tr></thead>
+        <tbody id="holderRetailBody">
+          <tr><td colspan="4" style="text-align:center;color:var(--dim)">加载中...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="sh-card">
+      <h4><span class="sh-icon main"></span>主力控盘 TOP <span class="sh-hint">户均市值最高</span></h4>
+      <table class="sh-table">
+        <thead><tr><th style="text-align:left">股票</th><th>股东户数</th><th>户均市值</th><th>户均持股</th></tr></thead>
+        <tbody id="holderMainBody">
+          <tr><td colspan="4" style="text-align:center;color:var(--dim)">加载中...</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
+
+  <p class="holder-note" id="holderPerCapitaNote"></p>
 
   <!-- ═══════ 户数存量分布 ═══════ -->
   <div class="dist-box">
@@ -1329,6 +1366,7 @@ function render() {
 
   renderFlow();
   renderShareholders();
+  renderHolderPerCapita();
   renderHolderDist();
 }
 
@@ -1553,8 +1591,53 @@ function renderShareholders() {
 function fmtHolders(n) {
   n = n || 0;
   if (n >= 1e8) return (n / 1e8).toFixed(2) + ' 亿';
-  if (n >= 1e4) return (n / 1e4).toFixed(0) + ' 万';
+  if (n >= 1e4) return (n / 1e4).toFixed(1) + ' 万';
   return String(n);
+}
+
+// 金额（元）→ 亿 / 万
+function fmtMoney(v) {
+  v = v || 0;
+  if (v >= 1e8) return (v / 1e8).toFixed(2) + ' 亿';
+  if (v >= 1e4) return (v / 1e4).toFixed(1) + ' 万';
+  return v.toFixed(0);
+}
+
+// 户均持股市值榜：低 = 账户小且散（散户扎堆），高 = 筹码集中在大账户（主力/机构控盘）
+function renderHolderPerCapita() {
+  const d = allData && allData.holder_distribution;
+  const pc = d && d.per_capita;
+  const groups = {
+    holderRetailBody: pc && pc.retail_top,
+    holderMainBody: pc && pc.main_top,
+  };
+  for (const id of Object.keys(groups)) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const list = groups[id];
+    if (!list || !list.length) {
+      el.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--dim)">暂无数据</td></tr>';
+      continue;
+    }
+    let html = '';
+    for (const x of list) {
+      html += '<tr>' +
+        '<td class="name-cell">' + x.name + '</td>' +
+        '<td style="text-align:right">' + fmtHolders(x.holders) + '</td>' +
+        '<td style="text-align:right">' + fmtMoney(x.avg_market_cap) + '</td>' +
+        '<td style="text-align:right">' + (x.avg_hold_num > 0 ? Math.round(x.avg_hold_num).toLocaleString() + ' 股' : '--') + '</td>' +
+      '</tr>';
+    }
+    el.innerHTML = html;
+  }
+  const note = document.getElementById('holderPerCapitaNote');
+  if (note) {
+    note.textContent = pc
+      ? '口径说明：东财不披露「主力 / 散户」的户数拆分，这里用「户均持股市值」（总市值 ÷ 股东户数）衡量账户结构 —— 越低说明账户越小越散（散户扎堆），越高说明筹码越集中在大账户。'
+        + '可排样本 ' + pc.sample.toLocaleString() + ' 只（股东户数 ≥ ' + pc.min_holders.toLocaleString() + '）。'
+        + '注意：户均市值同时受股价与大股东持股影响，低价股 / 小盘股天然偏低，它是「账户规模」指标，不等同于资金流口径的主力 / 散户。'
+      : '';
+  }
 }
 
 // 户数存量分布：全市场按股东户数分档，含各档资金构成
