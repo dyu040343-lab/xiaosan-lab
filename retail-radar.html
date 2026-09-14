@@ -1061,7 +1061,7 @@ td.code-cell { color: var(--dim); font-size: 10px; }
         <span class="kpi-label-tag" style="color:var(--purple)">超大+大单</span>
       </div>
       <div class="kpi-value" id="kpiMainAmount">--</div>
-      <div class="kpi-sub">共 <span class="num" id="kpiTotal">--</span> 只股票</div>
+      <div class="kpi-sub">净流入 <span class="num" id="kpiMainInCount">--</span> 只 · 净流出 <span class="num" id="kpiMainOutCount">--</span> 只</div>
     </div>
     <div class="kpi-card share">
       <div class="kpi-label">
@@ -1234,7 +1234,8 @@ function render() {
   const kpiMainEl = document.getElementById('kpiMainAmount');
   kpiMainEl.textContent = (mainAmt >= 0 ? '+' : '') + mainAmt.toFixed(2) + '亿';
   kpiMainEl.style.color = mainAmt >= 0 ? 'var(--red)' : 'var(--green)';
-  document.getElementById('kpiTotal').textContent = ov.total_stocks || 0;
+  document.getElementById('kpiMainInCount').textContent = ov.main_inflow_count || 0;
+  document.getElementById('kpiMainOutCount').textContent = ov.main_outflow_count || 0;
 
   // 资金构成占比（三档堆叠）
   const ts = ov.tier_share || {retail_pct:0, medium_pct:0, main_pct:0, tier_total:0};

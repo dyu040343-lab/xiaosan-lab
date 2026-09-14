@@ -10,7 +10,7 @@ import json
 import os
 import time
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 
 OUTPUT_DIR = "data"
 CACHE_FILE = f"{OUTPUT_DIR}/radar_data_cache.json"
@@ -341,69 +341,92 @@ def get_fallback_data():
 
 
 def fetch_shareholder_count():
-    """从东方财富数据中心获取股东户数变化数据"""
-    print("🔍 正在从东方财富获取股东户数变化数据...")
-    import requests
-    url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
-    columns = "SECURITY_CODE,SECURITY_NAME_ABBR,END_DATE,HOLDER_NUM,PRE_HOLDER_NUM,HOLDER_NUM_CHANGE,HOLDER_NUM_RATIO,HOLD_NOTICE_DATE,AVG_MARKET_CAP,TOTAL_MARKET_CAP,INTERVAL_CHRATE"
+    """从东方财富数据中心获取股东户数变化数据（增幅榜 + 减幅榜）
 
-    params = {
-        "reportName": "RPT_HOLDERNUMLATEST",
-        "sortColumns": "HOLDER_NUM_RATIO",
-        "sortTypes": "-1",
-        "pageSize": "200",
-        "pageNumber": "1",
-        "columns": columns,
-        "source": "WEB",
-        "client": "WEB",
-    }
+    接口：RPT_HOLDERNUMLATEST —— 每只股票在该表里只有一条「最新」披露记录。
+
+    三个必须注意的点（否则前端「户数减少 TOP」恒为空 / 榜单被垃圾数据污染）：
+    1. **必须双向请求**：接口只返回第一页，按 HOLDER_NUM_RATIO 降序拿到的 200 条
+       全是正值，减幅榜自然一条都筛不出来。所以要再按升序请求一次拿减幅榜。
+    2. **必须剔除伪比例**：次新股上市后户数从「4 户 / 60 户」这种极小基数暴增，
+       比例能算到 +576 万 %，完全无意义。用上期户数门槛（PRE_HOLDER_NUM >= 1000）剔除。
+    3. **必须限制披露窗口**：退市 / 停更股票的记录停留在数年前，用「最新披露日 - 180 天」
+       作为窗口，只保留仍在正常披露的股票。
+    """
+    print("🔍 正在从东方财富获取股东户数变化数据...")
+    url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+    columns = ("SECURITY_CODE,SECURITY_NAME_ABBR,END_DATE,HOLDER_NUM,PRE_HOLDER_NUM,"
+               "HOLDER_NUM_CHANGE,HOLDER_NUM_RATIO,HOLD_NOTICE_DATE,"
+               "AVG_MARKET_CAP,TOTAL_MARKET_CAP,INTERVAL_CHRATE")
+
+    def _query(extra, page_size=200):
+        params = {
+            "reportName": "RPT_HOLDERNUMLATEST",
+            "columns": columns,
+            "pageSize": str(page_size),
+            "pageNumber": "1",
+            "source": "WEB",
+            "client": "WEB",
+        }
+        params.update(extra)
+        resp = requests.get(url, params=params, headers=EASTMONEY_HEADERS, timeout=20)
+        payload = resp.json()
+        if payload.get("success") is False:
+            raise ValueError(payload.get("message") or "接口返回失败")
+        return (payload.get("result") or {}).get("data") or []
 
     try:
-        resp = requests.get(url, params=params, headers=EASTMONEY_HEADERS, timeout=15)
-        data = resp.json()
-        result = data.get("result", {})
-        items = result.get("data", []) or []
+        # 1) 先探最新披露日，据此计算有效性窗口
+        head = _query({"sortColumns": "END_DATE", "sortTypes": "-1"}, page_size=1)
+        latest = (head[0].get("END_DATE") or "")[:10] if head else ""
+        if not latest:
+            raise ValueError("无法获取最新披露日")
+        window_start = (datetime.strptime(latest, "%Y-%m-%d")
+                        - timedelta(days=180)).strftime("%Y-%m-%d")
 
-        if not items:
-            print("  ⚠️ API返回空，使用备用数据")
-            return _fallback_shareholder_data()
+        # 2) 有效样本过滤：上期户数 ≥1000（剔除次新股伪比例）+ 当期户数 ≥5000 + 披露日在窗口内
+        flt = (f"(PRE_HOLDER_NUM>=1000)(HOLDER_NUM>=5000)"
+               f"(END_DATE>='{window_start}')")
 
-        stocks = []
-        for item in items:
-            code = item.get("SECURITY_CODE", "")
-            name = item.get("SECURITY_NAME_ABBR", "")
-            current = item.get("HOLDER_NUM") or 0
-            previous = item.get("PRE_HOLDER_NUM") or 0
-            change = item.get("HOLDER_NUM_CHANGE") or 0
-            ratio = item.get("HOLDER_NUM_RATIO") or 0
-            end_date = item.get("END_DATE", "") or ""
-            notice_date = item.get("HOLD_NOTICE_DATE", "") or ""
-            avg_market_cap = item.get("AVG_MARKET_CAP") or 0
-            total_market_cap = item.get("TOTAL_MARKET_CAP") or 0
-            interval_chg = item.get("INTERVAL_CHRATE") or 0
+        # 3) 双向请求：降序 = 增幅榜，升序 = 减幅榜
+        inc_rows = _query({"sortColumns": "HOLDER_NUM_RATIO", "sortTypes": "-1", "filter": flt})
+        dec_rows = _query({"sortColumns": "HOLDER_NUM_RATIO", "sortTypes": "1", "filter": flt})
 
-            if not code or not name or previous == 0:
+        seen, stocks = set(), []
+        for item in inc_rows + dec_rows:
+            code = (item.get("SECURITY_CODE") or "").strip()
+            name = (item.get("SECURITY_NAME_ABBR") or "").strip()
+            ratio = item.get("HOLDER_NUM_RATIO")
+            if not code or not name or ratio is None or code in seen:
                 continue
-
-            period = end_date[:7] if end_date else ""
-
+            pct = round(float(ratio), 2)
+            # 户数变化超过 10 倍的记录基本是次新股 / 上市口径差异造成，与「筹码集中分散」无关
+            if pct <= -99.99 or pct >= 1000:
+                continue
+            seen.add(code)
+            end_date = (item.get("END_DATE") or "")[:10]
             stocks.append({
                 "code": code,
                 "name": name,
-                "current": int(current) if current else 0,
-                "previous": int(previous) if previous else 0,
-                "increase": int(change) if change else 0,
-                "change_pct": round(float(ratio), 2) if ratio else 0,
-                "period": period,
-                "avg_market_cap": round(float(avg_market_cap), 2) if avg_market_cap else 0,
-                "total_market_cap": round(float(total_market_cap), 2) if total_market_cap else 0,
-                "interval_chg": round(float(interval_chg), 2) if interval_chg else 0,
-                "notice_date": notice_date[:10] if notice_date else "",
+                "current": int(item.get("HOLDER_NUM") or 0),
+                "previous": int(item.get("PRE_HOLDER_NUM") or 0),
+                "increase": int(item.get("HOLDER_NUM_CHANGE") or 0),
+                "change_pct": pct,
+                "period": end_date[:7],
+                "avg_market_cap": round(float(item.get("AVG_MARKET_CAP") or 0), 2),
+                "total_market_cap": round(float(item.get("TOTAL_MARKET_CAP") or 0), 2),
+                "interval_chg": round(float(item.get("INTERVAL_CHRATE") or 0), 2),
+                "notice_date": (item.get("HOLD_NOTICE_DATE") or "")[:10],
             })
 
+        if not stocks:
+            print("  ⚠️ API返回空，使用备用数据")
+            return _fallback_shareholder_data()
+
         stocks.sort(key=lambda x: x["change_pct"], reverse=True)
-        stocks = stocks[:100]
-        print(f"  ✅ 从东方财富API获取 {len(stocks)} 条股东户数数据")
+        n_up = sum(1 for s in stocks if s["change_pct"] > 0)
+        n_down = sum(1 for s in stocks if s["change_pct"] < 0)
+        print(f"  ✅ 股东户数 {len(stocks)} 条（增幅 {n_up} / 减幅 {n_down}，窗口 {window_start}~{latest}）")
         return stocks
 
     except Exception as e:
@@ -426,6 +449,9 @@ def _fallback_shareholder_data():
         {"code": "000021", "name": "深科技", "current": 489589, "previous": 503900, "increase": -14311, "change_pct": -2.84, "period": "2026-08", "avg_market_cap": 22.5, "total_market_cap": 1102, "interval_chg": -3.21, "notice_date": "2026-09-01"},
         {"code": "300615", "name": "欣天科技", "current": 18700, "previous": 13760, "increase": 4940, "change_pct": 35.94, "period": "2026-08", "avg_market_cap": 18.6, "total_market_cap": 35, "interval_chg": 15.67, "notice_date": "2026-09-02"},
         {"code": "300006", "name": "莱美药业", "current": 29000, "previous": 23667, "increase": 5333, "change_pct": 22.56, "period": "2026-08", "avg_market_cap": 6.8, "total_market_cap": 20, "interval_chg": 8.92, "notice_date": "2026-09-03"},
+        {"code": "600519", "name": "贵州茅台", "current": 218600, "previous": 265400, "increase": -46800, "change_pct": -17.63, "period": "2026-06", "avg_market_cap": 1250.4, "total_market_cap": 15520, "interval_chg": -9.87, "notice_date": "2026-08-29"},
+        {"code": "601318", "name": "中国平安", "current": 1163400, "previous": 1358900, "increase": -195500, "change_pct": -14.39, "period": "2026-06", "avg_market_cap": 118.7, "total_market_cap": 9860, "interval_chg": -6.52, "notice_date": "2026-08-28"},
+        {"code": "000858", "name": "五粮液", "current": 412000, "previous": 468300, "increase": -56300, "change_pct": -12.02, "period": "2026-06", "avg_market_cap": 342.6, "total_market_cap": 4210, "interval_chg": -4.11, "notice_date": "2026-08-30"},
         {"code": "002594", "name": "比亚迪", "current": 755000, "previous": 718600, "increase": 36400, "change_pct": 5.06, "period": "2026Q2", "avg_market_cap": 85.2, "total_market_cap": 6433, "interval_chg": -2.15, "notice_date": "2026-08-30"},
         {"code": "000977", "name": "浪潮信息", "current": 245000, "previous": 198000, "increase": 47000, "change_pct": 23.74, "period": "2026Q2", "avg_market_cap": 98.5, "total_market_cap": 2413, "interval_chg": 12.34, "notice_date": "2026-08-29"},
     ]
@@ -439,6 +465,8 @@ def calc_overview(stocks):
     retail_outflow = [s for s in stocks if s.get("retail_net", 0) < 0]
     medium_inflow = [s for s in stocks if s.get("medium_net", 0) > 0]
     medium_outflow = [s for s in stocks if s.get("medium_net", 0) < 0]
+    main_inflow = [s for s in stocks if s.get("main_net", 0) > 0]
+    main_outflow = [s for s in stocks if s.get("main_net", 0) < 0]
 
     # 三档绝对值之和（用于占比：按资金绝对体量加权）
     retail_abs = sum(abs(s.get("retail_net", 0)) for s in stocks)
@@ -470,6 +498,8 @@ def calc_overview(stocks):
         "medium_outflow_count": len(medium_outflow),
         # 主力（超大单+大单）
         "main_amount": total_main,
+        "main_inflow_count": len(main_inflow),
+        "main_outflow_count": len(main_outflow),
         "super_total": total_super,
         "large_total": total_large,
         "medium_total": total_medium,
@@ -517,7 +547,8 @@ def main():
     print(f"\n✅ 数据保存成功: {output_path}")
     print(f"🕐 更新时间: {output['last_updated']}")
     print(f"📊 散户资金: {len(retail_flow)} 条 [{status_labels.get(data_status, data_status)}]")
-    print(f"💰 散户净额: {overview['net_amount']}亿 | 中单净额: {overview['medium_amount']}亿 | 主力净额: {overview['main_amount']}亿 | 散户净流入{overview['inflow_count']}只 / 净流出{overview['outflow_count']}只")
+    print(f"💰 散户净额: {overview['net_amount']}亿 | 中单净额: {overview['medium_amount']}亿 | 主力净额: {overview['main_amount']}亿")
+    print(f"   散户 {overview['inflow_count']}流入/{overview['outflow_count']}流出 · 中单 {overview['medium_inflow_count']}/{overview['medium_outflow_count']} · 主力 {overview['main_inflow_count']}/{overview['main_outflow_count']}")
     ts = overview['tier_share']
     print(f"📊 三档占比: 散户{ts['retail_pct']}% · 中单{ts['medium_pct']}% · 主力{ts['main_pct']}%（按|净额|之和加权，总和{ts['tier_total']}亿）")
     print(f"📈 四档: 超大单{overview['super_total']}亿 | 大单{overview['large_total']}亿 | 中单{overview['medium_total']}亿 | 小单{overview['small_total']}亿")
