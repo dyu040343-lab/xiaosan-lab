@@ -790,6 +790,8 @@ td.code-cell { color: var(--dim); font-size: 10px; }
 
 /* ═══ 筹码动向表（可排序） ═══ */
 .chip-box { height: 600px; }
+.basis-bar { margin-bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+.basis-bar .subtab { font-size: 11px; padding: 5px 14px; }
 .chip-note {
   margin: 0 0 10px;
   font-size: 11px;
@@ -1068,11 +1070,12 @@ td.code-cell { color: var(--dim); font-size: 10px; }
   </div>
 
   <div class="table-box chip-box">
+    <div class="subtab-bar basis-bar" id="basisBar"></div>
     <p class="chip-note" id="chipNote"></p>
     <table>
       <thead id="chipHead"></thead>
       <tbody id="chipBody">
-        <tr><td colspan="6" style="text-align:center;color:var(--dim);padding:40px;">加载中...</td></tr>
+        <tr><td colspan="8" style="text-align:center;color:var(--dim);padding:40px;">加载中...</td></tr>
       </tbody>
     </table>
   </div>
@@ -1379,14 +1382,54 @@ function renderTable(stocks, primaryField) {
 
 // 筹码动向：一行一只股票，把「户数变化 × 主力持股 × 主力环比」合成一张可排序表
 let chipSortCol = 'holder_chg', chipSortAsc = true;
-const CHIP_COLS = [
-  {key: 'name',       label: '股票'},
-  {key: 'holder_chg', label: '户数变化'},
-  {key: 'holders',    label: '股东户数'},
-  {key: 'inst_pct',   label: '主力持股'},
-  {key: 'inst_delta', label: '主力环比'},
-  {key: 'retail_pct', label: '散户及其他'},
+
+// 占比分母口径：circ=占流通A股（默认）/ free=占自由流通 / total=占总股本
+let chipBasis = 'circ';
+const CHIP_BASIS = [
+  {key: 'circ',  label: '占流通A股'},
+  {key: 'free',  label: '占自由流通'},
+  {key: 'total', label: '占总股本'},
 ];
+// 三档占比列：key 是「占流通A股」的字段，ff=占自由流通、ts=占总股本的对应字段
+// （字段名由后端给出，不是简单拼后缀：inst_pct 的自由流通字段叫 inst_ff，不是 inst_pct_ff）
+const CHIP_PCT_COLS = [
+  {key: 'inst_pct',   ff: 'inst_ff',   ts: 'inst_ts'},
+  {key: 'legal_pct',  ff: 'legal_ff',  ts: 'legal_ts'},
+  {key: 'retail_pct', ff: 'retail_ff', ts: 'retail_ts'},
+];
+
+const CHIP_COLS = [
+  {key: 'name',        label: '股票'},
+  {key: 'holder_chg',  label: '户数变化'},
+  {key: 'holders',     label: '股东户数'},
+  {key: 'float_ratio', label: '自由流通'},
+  {key: 'inst_pct',    label: '主力持股'},
+  {key: 'inst_delta',  label: '主力环比'},
+  {key: 'legal_pct',   label: '一般法人'},
+  {key: 'retail_pct',  label: '散户及其他'},
+];
+
+// 按当前口径取某一档的占比
+function chipVal(x, key) {
+  const c = CHIP_PCT_COLS.find(o => o.key === key);
+  if (!c) return x[key];
+  if (chipBasis === 'free') return x[c.ff];
+  if (chipBasis === 'total') return x[c.ts];
+  return x[key];
+}
+
+function switchBasis(mode) {
+  chipBasis = mode;
+  renderChipFlow();
+}
+
+function renderBasisBar() {
+  const bar = document.getElementById('basisBar');
+  if (!bar) return;
+  bar.innerHTML = CHIP_BASIS.map(b =>
+    '<div class="subtab' + (chipBasis === b.key ? ' active' : '') + '" data-basis="' + b.key + '"'
+    + ' onclick="switchBasis(\'' + b.key + '\')">' + b.label + '</div>').join('');
+}
 
 function chipSortTable(col) {
   if (chipSortCol === col) {
@@ -1404,12 +1447,13 @@ function renderChipFlow() {
   const body = document.getElementById('chipBody');
   const note = document.getElementById('chipNote');
   if (!head || !body) return;
+  renderBasisBar();
   const d = allData && allData.holder_chip;
   const cf = d && d.chip_flow;
   const rows = (cf && cf.rows) || [];
   if (!rows.length) {
     head.innerHTML = '';
-    body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--dim)">暂无数据</td></tr>';
+    body.innerHTML = '<tr><td colspan="' + CHIP_COLS.length + '" style="text-align:center;color:var(--dim)">暂无数据</td></tr>';
     if (note) note.textContent = '';
     return;
   }
@@ -1422,7 +1466,7 @@ function renderChipFlow() {
 
   const col = chipSortCol, asc = chipSortAsc;
   const sorted = rows.slice().sort((a, b) => {
-    let va = a[col], vb = b[col];
+    let va = chipVal(a, col), vb = chipVal(b, col);
     if (col === 'name') {
       return asc ? String(va).localeCompare(String(vb), 'zh-CN')
                  : String(vb).localeCompare(String(va), 'zh-CN');
@@ -1438,28 +1482,42 @@ function renderChipFlow() {
   const aCol = (v, color) => v === null || v === undefined
     ? '<td style="color:var(--dim)">--</td>'
     : '<td style="color:' + color(v) + '">' + (v > 0 ? '+' : '') + v.toFixed(1) + '%</td>';
+  // 三档占比：保留 2 位小数，不带 +/- 号（这是占比不是净额）
+  const pCol = (v, color) => v === null || v === undefined
+    ? '<td style="color:var(--dim)">--</td>'
+    : '<td style="color:' + color + '">' + v.toFixed(2) + '%</td>';
   let html = '';
   for (const x of shown) {
     html += '<tr>' +
       '<td class="name-cell">' + x.name + '</td>' +
       aCol(x.holder_chg, v => v > 0 ? 'var(--red)' : v < 0 ? 'var(--green)' : 'var(--dim)') +
       '<td>' + (x.holders ? x.holders.toLocaleString() : '--') + '</td>' +
-      '<td style="color:var(--blue)">' + (x.inst_pct || 0).toFixed(2) + '%</td>' +
+      '<td style="color:var(--dim)">' + (x.float_ratio || 0).toFixed(1) + '%</td>' +
+      pCol(chipVal(x, 'inst_pct'), 'var(--blue)') +
       '<td style="color:' + (x.inst_delta === null || x.inst_delta === undefined ? 'var(--dim)'
         : x.inst_delta > 0 ? 'var(--blue)' : x.inst_delta < 0 ? 'var(--green)' : 'var(--dim)') + '">' +
         (x.inst_delta === null || x.inst_delta === undefined ? '--'
           : (x.inst_delta > 0 ? '+' : '') + x.inst_delta.toFixed(2) + 'pp') + '</td>' +
-      '<td style="color:var(--red)">' + (x.retail_pct || 0).toFixed(2) + '%</td>' +
+      pCol(chipVal(x, 'legal_pct'), 'var(--amber, #B45309)') +
+      pCol(chipVal(x, 'retail_pct'), 'var(--red)') +
     '</tr>';
   }
   body.innerHTML = html;
 
   if (note) {
+    const basisLabel = (CHIP_BASIS.find(b => b.key === chipBasis) || {}).label || '';
+    // 总股本口径下三段加总 = 流通A股/总股本，剩下的才是 H股+限售股
+    const sumTip = chipBasis === 'total'
+      ? '三档加总 = 该股「流通A股 ÷ 总股本」，差额是 H股与限售股（不在流通盘里）。'
+      : '三档（主力 / 一般法人 / 散户及其他）加总 = 100%。';
     note.textContent = '共 ' + rows.length.toLocaleString() + ' 只，已按当前排序显示前 ' + shown.length + ' 行｜'
-      + '户数变化 = 股东户数环比（披露口径，上市首期口径不可比的已置为 --）；主力持股 = 投资机构占流通股比（'
-      + (cf.period || '--') + '）；主力环比 = 与上一报告期（' + (cf.prev_period || '--') + '）的百分点差；'
-      + '散户及其他 = 100% − 机构汇总。'
-      + '口径提醒：陆股通（香港中央结算）与产业资本一并被东财归入「其他」，因此它们算在「机构汇总」一侧、不计入「散户及其他」。'
+      + '当前分母：' + basisLabel + '｜' + sumTip
+      + '户数变化 = 股东户数环比（披露口径，上市首期不可比的已置为 --，报告期 ' + (cf.period || '--') + '）；'
+      + '主力持股 = 投资机构持股；主力环比 = 与上一报告期（' + (cf.prev_period || '--') + '）的百分点差。'
+      + '「自由流通」= 自由流通A股 ÷ 流通A股（口径：前十大流通股东中占总股本 ≥5% 的视为锁定筹码，'
+      + '陆股通不锁定——它本身就是自由流通；锁定筹码已从其所属那一档扣除）。'
+      + '口径提醒：陆股通与产业资本被东财一并归入「其他」→ 落在「一般法人」这一档；'
+      + '若控股股东本身是保险/券商等金融机构（如平安银行、中国人寿），它登记在「主力」档里。'
       + '典型读法：户数下降 + 主力环比上升 = 筹码在向机构集中；户数上升 + 主力环比下降 = 筹码在向散户扩散。';
   }
 }

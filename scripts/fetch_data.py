@@ -127,7 +127,7 @@ def fetch_from_eastmoney():
                         "invt": 2,
                         "fid": "f62",
                         "fs": "m:0 t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048",
-                        "fields": "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f100,f124",
+                        "fields": "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f100,f124,f38,f39",
                     }
                     data = _fetch_page(session, base_url, params)
                     items = data["data"].get("diff", [])
@@ -169,7 +169,10 @@ def fetch_from_eastmoney():
 
     # 字段映射: f62=主力净额, f184=主力净占比, f66=超大单净额, f69=超大单净占比,
     #          f72=大单净额, f75=大单净占比, f78=中单净额, f81=中单净占比,
-    #          f84=小单净额, f87=小单净占比, f124=5日涨跌
+    #          f84=小单净额, f87=小单净占比, f124=5日涨跌,
+    #          **f38=总股本, f39=流通A股（不含H股）** ← 这两个字段只在 clist/ulist 接口里是股本，
+    #          在 stock/get 接口里 f84/f85 才是股本，语义随接口变，别混用
+    #          ⚠️ f84 在本接口是「小单净额」，不是总股本
     stocks = []
     for item in all_stocks:
         code = str(item.get("f12", "")).strip()
@@ -237,6 +240,8 @@ def fetch_from_eastmoney():
             "small_pct": small_pct,
             "total_amount": total_amount,
             "dynamic_ratio": dynamic_ratio,
+            "total_shares": to_float(item.get("f38")),   # 总股本（股）
+            "circ_shares": to_float(item.get("f39")),    # 流通A股（股，不含H股）
             "sector": sector,
             "source": "eastmoney",
         })
@@ -351,12 +356,28 @@ HOLDER_COLUMNS = ("SECURITY_CODE,SECURITY_NAME_ABBR,END_DATE,HOLDER_NUM,PRE_HOLD
 HOLDER_MIN_PRE_NUM = 1000       # 上期户数下限：低于此视为披露口径不可比
 HOLDER_CHG_LIMIT = 1000.0       # 变化幅度上限（+1000%）；另剔除 ≤ -99.99% 的异常
 
-# 口径版本号：改了结构就 +1，让当天缓存失效重算
-HOLDER_DIST_VERSION = 7
+# 口径版本号：改了结构就 +1，让当天缓存失效重算（10 = 自由流通三段归一化到 100）
+HOLDER_DIST_VERSION = 10
 
 # 机构持股分类（RPT_MAIN_ORGHOLD 的 ORG_TYPE）
 ORGHOLD_ORG_TOTAL = "00"   # 机构汇总 = 机构 + 一般法人 合计占流通股比
 ORGHOLD_ORG_LEGAL = "07"   # 其他 = 一般法人（大股东 / 产业资本）+ 陆股通等未单独分类的机构
+
+# 自由流通股口径（2026-09-14 用户拍板）：**前十大流通股东中「占总股本 ≥5%」视为锁定筹码**
+# 依据：≥5% 是举牌线，这类股东多为控股股东 / 战略投资者，长期不参与博弈。
+# 例外：**陆股通必须排除** —— 北向资金经常 >5%（宁德时代 19.97%），但它本身就是自由流通。
+FREE_FLOAT_LOCK_PCT = 5.0
+
+# 锁定筹码要落到「哪一段」里去扣（否则会出现 主力占自由流通 1300% 这种数）
+# 依据 2026-09-14 实测：证券投资基金进 01 基金 → 主力；而「私募基金」和「券商资管 FOF」
+# 都落在 其他(07) → 一般法人。国寿集团/平安集团这类保险母公司登记在 05 保险 → 主力。
+LOCK_TYPE_SEGMENT = {
+    "保险公司": "inst", "保险产品": "inst", "保险": "inst",
+    "证券公司": "inst", "券商": "inst", "社保": "inst", "QFII": "inst",
+    "证券投资基金": "inst", "信托": "inst",
+    "私募基金": "legal", "集合理财计划": "legal", "投资公司": "legal", "其它": "legal",
+    "个人": "retail",
+}
 
 # 筹码动向表（前端可排序，只渲染排序后的前 N 行；数据仍覆盖全市场）
 CHIP_FLOW_MAX_ROWS = 300
@@ -463,7 +484,86 @@ def _orghold_periods():
     return [p for p in (cur, prev) if p]
 
 
-def build_chip_flow(by_code, holder_rows, periods, total_map, legal_map, prev_total, prev_legal):
+def _freehold_query(extra, page_size=500, page_number=1):
+    """请求东财数据中心 RPT_F10_EH_FREEHOLDERS（十大流通股东）"""
+    params = {
+        "reportName": "RPT_F10_EH_FREEHOLDERS",
+        "columns": ("SECURITY_CODE,SECURITY_NAME_ABBR,END_DATE,HOLDER_NAME,HOLDER_RANK,"
+                    "LISTED_SHARES_RATIO,FREE_HOLDNUM_RATIO,IS_LANDSTOCK,HOLDER_TYPE"),
+        "pageSize": str(page_size),
+        "pageNumber": str(page_number),
+        "source": "WEB",
+        "client": "WEB",
+    }
+    params.update(extra)
+    resp = requests.get(DATACENTER_URL, params=params, headers=EASTMONEY_HEADERS, timeout=25)
+    payload = resp.json()
+    if payload.get("success") is False:
+        raise ValueError(payload.get("message") or "接口返回失败")
+    return (payload.get("result") or {}).get("data") or []
+
+
+def fetch_float_lock(period):
+    """自由流通股：算出每只股票的「锁定比例」（占流通A股），供前端算自由流通口径
+
+    规则（用户 2026-09-14 拍板）：**前十大流通股东中，占总股本 ≥5% 的股东视为锁定筹码**；
+    **陆股通必须排除** —— 北向资金经常 >5%（宁德时代 19.97%），但它本身就是自由流通。
+
+    ⚠️ 两个比例字段的语义与直觉相反，已用中石油 / 工行实测校正，别搞反：
+    - `LISTED_SHARES_RATIO` = **占流通A股**比例（中石油集团 92.997% = 1509.2÷1619.2）
+    - `FREE_HOLDNUM_RATIO`  = **占总股本**比例（中石油集团  82.277% = 1509.2÷1830.2）
+    两者相除即「流通A股 ÷ 总股本」。
+
+    返回 `{code: {"inst": …, "legal": …, "retail": …}}`（均为**占流通A股 %**，按 LOCK_TYPE_SEGMENT
+    归到锁定筹码所属的那一段）；不在表里的股票视为全 0，即全部自由流通。
+    分子分母必须同源：锁定筹码要从它所在的段里扣掉，否则会出现「主力占自由流通 1300%」。
+    """
+    print("🔍 正在获取自由流通股口径（前十大中 ≥5% 股东 = 锁定）...")
+    try:
+        flt = f"(END_DATE='{period}')(LISTED_SHARES_RATIO>={FREE_FLOAT_LOCK_PCT})"
+        rows, page = [], 1
+        while page <= 40:
+            batch = _freehold_query(
+                {"filter": flt, "sortColumns": "SECURITY_CODE", "sortTypes": "1"},
+                page_size=500, page_number=page)
+            if not batch:
+                break
+            rows.extend(batch)
+            if len(batch) < 500:
+                break
+            page += 1
+        if not rows:
+            raise ValueError("未取到十大流通股东数据")
+
+        lock = {}
+        for r in rows:
+            code = r.get("SECURITY_CODE")
+            if not code:
+                continue
+            if str(r.get("IS_LANDSTOCK")) == "1":
+                continue                                  # 北向资金算自由流通，不锁定
+            listed = float(r.get("LISTED_SHARES_RATIO") or 0)
+            if listed <= 0:
+                continue
+            seg = LOCK_TYPE_SEGMENT.get(str(r.get("HOLDER_TYPE") or "").strip(), "legal")
+            slot = lock.setdefault(code, {"inst": 0.0, "legal": 0.0, "retail": 0.0})
+            slot[seg] += listed
+
+        for v in lock.values():
+            for k in list(v.keys()):
+                v[k] = round(min(v[k], 100.0), 4)         # 单段锁定不超过 100%
+
+        heavy = sum(1 for v in lock.values() if sum(v.values()) > 100)
+        print(f"  ✅ 自由流通口径 [{period}]: {len(rows)} 行 → {len(lock)} 只有锁定股东"
+              + (f"（⚠️ {heavy} 只锁定合计 >100%，已逐段截断）" if heavy else ""))
+        return lock
+    except Exception as e:
+        print(f"  ❌ 自由流通口径抓取失败: {e}")
+        return {}
+
+
+def build_chip_flow(by_code, holder_rows, periods, total_map, legal_map, prev_total, prev_legal,
+                    lock_map=None):
     """筹码动向表（前端可排序，一行一只股票，全市场覆盖）
 
     把两个口径合成一张表 —— 这是本看板最核心的一组交叉信号：
@@ -472,6 +572,12 @@ def build_chip_flow(by_code, holder_rows, periods, total_map, legal_map, prev_to
     - `inst_pct`    主力（投资机构）持股占流通比 ← 筹码在不在机构手里
     - `inst_delta`  主力持股环比（百分点）  ← 机构在加还是减（比"高不高"更重要）
     - `retail_pct`  散户及其他占流通比      ← 散户锚点
+    - `float_ratio` 自由流通A股/流通A股 (%) ← 剔除 ≥5% 股东后的"可博弈筹码"占比
+    - `circ_ratio`  流通A股/总股本 (%)      ← 换算总股本口径用
+
+    三个占比列（inst_pct / legal / retail_pct）都以**流通A股**为分母，
+    前端按 `float_ratio`、`circ_ratio` 现场换算成「占自由流通」「占总股本」两个口径，
+    不重复存储，避免数据体积膨胀三倍。
 
     典型读法：户数降 + 主力环比升 = 筹码在向机构集中（吸筹）
 
@@ -513,6 +619,31 @@ def build_chip_flow(by_code, holder_rows, periods, total_map, legal_map, prev_to
                 p_legal = prev_legal.get(code, (0.0, 0))[0]
                 delta = round(inst - max(p_total - p_legal, 0.0), 2)
             holders, chg = holder_map.get(code, (0, None))
+            # ── 自由流通股口径 ──
+            # 分子分母同源：锁定筹码要从它所在的段里扣掉，再除以自由流通盘，
+            # 否则「国寿集团 92.8% 被判定为锁定、却登记在保险档（主力）」会算出 1300%
+            lk = (lock_map or {}).get(code) or {}
+            li, ll, lr = lk.get("inst", 0.0), lk.get("legal", 0.0), lk.get("retail", 0.0)
+            free = round(max(100.0 - (li + ll + lr), 0.0), 2)   # 自由流通A股 ÷ 流通A股 ×100
+            retail_raw = max(100 - total, 0.0)
+            # 三段先各自扣掉锁定部分并截断到 0；再按合计归一化到 100。
+            # 不归一化的话，锁定归类与分段口径冲突的票（约 0.6%，主要是「个人持股 ≥5% 但被算进
+            # 其他档」之类）会出现加总 ≠ 100。
+            i_raw = max(inst - li, 0.0)
+            l_raw = max(legal - ll, 0.0)
+            r_raw = max(retail_raw - lr, 0.0)
+            tot = i_raw + l_raw + r_raw
+            if free > 0.5 and tot > 0.5:
+                k = 100.0 / tot
+                inst_ff = round(i_raw * k, 2)
+                legal_ff = round(l_raw * k, 2)
+                retail_ff = round(100.0 - inst_ff - legal_ff, 2)   # 兜底，保证严格加总 100
+            else:
+                inst_ff = legal_ff = retail_ff = None
+            # circ_ratio = 流通A股 ÷ 总股本 ×100（push2 的 f39/f38，全市场覆盖）
+            ts = stock.get("total_shares") or 0
+            cs = stock.get("circ_shares") or 0
+            circ_ratio = round(cs / ts * 100, 2) if ts > 0 and cs > 0 else 100.0
             rows.append({
                 "code": code,
                 "name": stock.get("name", ""),
@@ -520,7 +651,19 @@ def build_chip_flow(by_code, holder_rows, periods, total_map, legal_map, prev_to
                 "holder_chg": chg,
                 "inst_pct": round(inst, 2),
                 "inst_delta": delta,
-                "retail_pct": round(max(100 - total, 0.0), 2),
+                "retail_pct": round(retail_raw, 2),
+                "legal_pct": round(legal, 2),
+                "float_ratio": free,
+                "circ_ratio": circ_ratio,
+                "lock_inst": round(li, 2),
+                "lock_legal": round(ll, 2),
+                "lock_retail": round(lr, 2),
+                "inst_ff": inst_ff,
+                "legal_ff": legal_ff,
+                "retail_ff": retail_ff,
+                "inst_ts": round(inst * circ_ratio / 100, 2),
+                "legal_ts": round(legal * circ_ratio / 100, 2),
+                "retail_ts": round(retail_raw * circ_ratio / 100, 2),
             })
 
         if not rows:
@@ -582,15 +725,20 @@ def build_holder_chip(stocks):
         prev_total = _orghold_ratio_map(prev_period, ORGHOLD_ORG_TOTAL) if prev_period else {}
         prev_legal = _orghold_ratio_map(prev_period, ORGHOLD_ORG_LEGAL) if prev_period else {}
 
+        # 自由流通股口径：前十大流通股东中 ≥5% 的 = 锁定（陆股通除外）
+        lock_map = fetch_float_lock(cur_period)
+
         # 筹码动向表：户数变化 × 主力持股 × 环比（前端可排序）
         chip_flow = build_chip_flow(by_code, rows, periods,
-                                    total_map, legal_map, prev_total, prev_legal)
+                                    total_map, legal_map, prev_total, prev_legal,
+                                    lock_map=lock_map)
         if not chip_flow:
             raise ValueError("筹码动向表合成失败")
 
         return {
             "version": HOLDER_DIST_VERSION,
             "window": f"{window_start} ~ {latest}",
+            "float_window": cur_period,
             "chip_flow": chip_flow,
         }
     except Exception as e:
