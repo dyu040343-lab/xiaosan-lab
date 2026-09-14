@@ -355,13 +355,16 @@ HOLDER_BUCKETS = [
 ]
 
 # 分档口径版本号：改了结构就 +1，让当天缓存失效重算
-HOLDER_DIST_VERSION = 5
+HOLDER_DIST_VERSION = 6
 
 # 机构持股结构（主力 / 大股东法人 / 散户）榜单
 OWNERSHIP_TOP_N = 20
 OWNERSHIP_MIN_HOLDERS = 5000   # 散户扎堆榜的最低股东户数（用于剔除并列噪声并做二次排序）
 ORGHOLD_ORG_TOTAL = "00"   # 机构汇总 = 机构 + 一般法人 合计占流通股比
 ORGHOLD_ORG_LEGAL = "07"   # 其他 = 一般法人（大股东 / 产业资本）占流通股比
+
+# 筹码动向表（前端可排序，只渲染排序后的前 N 行；数据仍覆盖全市场）
+CHIP_FLOW_MAX_ROWS = 300
 
 
 def _holder_query(extra, page_size=200, page_number=1):
@@ -524,7 +527,41 @@ def _orghold_query(extra, page_size=500, page_number=1):
     raise last_err
 
 
-def build_ownership_structure(by_code, holders_map):
+def _orghold_ratio_map(period, org_type):
+    """某一报告期、某一机构类型的 {code: (占流通股比, 机构家数)}"""
+    mapping, page = {}, 1
+    while page <= 20:
+        batch = _orghold_query(
+            {"filter": f"(REPORT_DATE='{period}')(ORG_TYPE=\"{org_type}\")",
+             "sortColumns": "SECURITY_CODE", "sortTypes": "1"},
+            page_size=500, page_number=page)
+        if not batch:
+            break
+        for r in batch:
+            code = r.get("SECURITY_CODE")
+            if code:
+                mapping[code] = (float(r.get("FREESHARES_RATIO") or 0),
+                                 int(r.get("HOULD_NUM") or 0))
+        if len(batch) < 500:
+            break
+        page += 1
+    return mapping
+
+
+def _orghold_periods():
+    """取机构持股的最近两个报告期（降序）"""
+    head = _orghold_query({"sortColumns": "REPORT_DATE", "sortTypes": "-1"}, page_size=1)
+    cur = (head[0].get("REPORT_DATE") or "")[:10] if head else ""
+    if not cur:
+        return []
+    prev_head = _orghold_query(
+        {"sortColumns": "REPORT_DATE", "sortTypes": "-1",
+         "filter": f"(REPORT_DATE<'{cur}')"}, page_size=1)
+    prev = (prev_head[0].get("REPORT_DATE") or "")[:10] if prev_head else ""
+    return [p for p in (cur, prev) if p]
+
+
+def build_ownership_structure(by_code, holders_map, total_map, legal_map):
     """主力 / 大股东法人 / 散户及其他 —— 三段持股结构（占流通股比）
 
     数据源：东财数据中心 RPT_MAIN_ORGHOLD（机构持股，季度披露）。
@@ -535,55 +572,22 @@ def build_ownership_structure(by_code, holders_map):
     - **主力（投资机构）= 汇总 − 其他**（即 基金 + QFII + 社保 + 券商 + 保险 + 信托）
     - **散户及其他 = 100 − 汇总**（未披露在机构名单里的账户，绝大多数是散户）
     """
-    print("🔍 正在获取机构持股结构（主力/法人/散户）...")
+    print("🔍 正在汇总机构持股结构（主力/法人/散户）...")
     try:
-        head = _orghold_query({"sortColumns": "REPORT_DATE", "sortTypes": "-1"}, page_size=1)
-        period = (head[0].get("REPORT_DATE") or "")[:10] if head else ""
-        if not period:
-            raise ValueError("无法获取最新报告期")
-        flt = f"(REPORT_DATE='{period}')"
-
-        total_rows, legal_rows = [], []
-        for org_type, bucket in ((ORGHOLD_ORG_TOTAL, total_rows), (ORGHOLD_ORG_LEGAL, legal_rows)):
-            page = 1
-            while page <= 20:
-                batch = _orghold_query(
-                    {"filter": flt + f'(ORG_TYPE="{org_type}")',
-                     "sortColumns": "SECURITY_CODE", "sortTypes": "1"},
-                    page_size=500, page_number=page)
-                if not batch:
-                    break
-                bucket.extend(batch)
-                if len(batch) < 500:
-                    break
-                page += 1
-
-        if not total_rows:
-            raise ValueError("未取到机构汇总数据")
-
-        legal_by_code = {}
-        for r in legal_rows:
-            legal_by_code[r.get("SECURITY_CODE")] = float(r.get("FREESHARES_RATIO") or 0)
-
         items = []
-        for r in total_rows:
-            code = r.get("SECURITY_CODE")
+        for code, (total, orgs) in total_map.items():
             if code not in by_code:
                 continue
-            total = r.get("FREESHARES_RATIO")
-            if total is None:
-                continue
-            total = float(total)
-            legal = legal_by_code.get(code, 0.0)
+            legal = legal_map.get(code, (0.0, 0))[0]
             if not (0 <= total <= 100.5) or not (0 <= legal <= 100.5):
                 continue
             items.append({
                 "code": code,
-                "name": (r.get("SECURITY_NAME_ABBR") or "").strip(),
+                "name": by_code[code].get("name", ""),
                 "inst_pct": round(max(total - legal, 0.0), 2),
                 "legal_pct": round(legal, 2),
                 "retail_pct": round(max(100 - total, 0.0), 2),
-                "orgs": int(r.get("HOULD_NUM") or 0),
+                "orgs": orgs,
                 "holders": holders_map.get(code, 0),
             })
 
@@ -601,17 +605,81 @@ def build_ownership_structure(by_code, holders_map):
                 and not (x["inst_pct"] + x["legal_pct"] <= 0.0001 and x["orgs"] >= 5)]
         retail_top = sorted(pool, key=lambda x: (-x["retail_pct"], -x["holders"]))[:OWNERSHIP_TOP_N]
 
-        print(f"  ✅ 持股结构 [{period}] {len(items)} 只｜主力最高 {main_top[0]['name']} {main_top[0]['inst_pct']}%"
+        print(f"  ✅ 持股结构 {len(items)} 只｜主力最高 {main_top[0]['name']} {main_top[0]['inst_pct']}%"
               f"｜散户最高 {retail_top[0]['name']} {retail_top[0]['retail_pct']}%（户数 {retail_top[0]['holders']:,}）")
         return {
-            "period": period,
             "sample": len(items),
             "min_holders": OWNERSHIP_MIN_HOLDERS,
             "main_top": main_top,
             "retail_top": retail_top,
         }
     except Exception as e:
-        print(f"  ❌ 持股结构抓取失败: {e}")
+        print(f"  ❌ 持股结构汇总失败: {e}")
+        return None
+
+
+def build_chip_flow(by_code, holder_rows, periods, total_map, legal_map, prev_total, prev_legal):
+    """筹码动向表（前端可排序，一行一只股票，全市场覆盖）
+
+    把两个口径合成一张表 —— 这是本看板最核心的一组交叉信号：
+    - `holder_chg`  户数变化（环比 %）     ← 谁的人数在变
+    - `holders`     股东户数              ← 人数存量
+    - `inst_pct`    主力（投资机构）持股占流通比 ← 筹码在不在机构手里
+    - `inst_delta`  主力持股环比（百分点）  ← 机构在加还是减（比"高不高"更重要）
+    - `retail_pct`  散户及其他占流通比      ← 散户锚点
+
+    典型读法：户数降 + 主力环比升 = 筹码在向机构集中（吸筹）
+    """
+    print("🔍 正在合成筹码动向表（户数变化 × 主力持股 ÷ 环比）...")
+    try:
+        holder_map = {}
+        for r in holder_rows:
+            code = r.get("SECURITY_CODE")
+            if not code:
+                continue
+            ratio = r.get("HOLDER_NUM_RATIO")
+            holder_map[code] = (int(r.get("HOLDER_NUM") or 0),
+                                round(float(ratio), 2) if ratio is not None else None)
+
+        rows = []
+        for code, (total, orgs) in total_map.items():
+            stock = by_code.get(code)
+            if not stock:
+                continue
+            # 剔除「有机构家数却占流通比为 0」的自相矛盾记录（次新股流通股未定义）
+            if total <= 0 and orgs >= 5:
+                continue
+            legal = legal_map.get(code, (0.0, 0))[0]
+            inst = max(total - legal, 0.0)
+            delta = None
+            if periods and len(periods) > 1 and code in prev_total:
+                p_total = prev_total[code][0]
+                p_legal = prev_legal.get(code, (0.0, 0))[0]
+                delta = round(inst - max(p_total - p_legal, 0.0), 2)
+            holders, chg = holder_map.get(code, (0, None))
+            rows.append({
+                "code": code,
+                "name": stock.get("name", ""),
+                "holders": holders,
+                "holder_chg": chg,
+                "inst_pct": round(inst, 2),
+                "inst_delta": delta,
+                "retail_pct": round(max(100 - total, 0.0), 2),
+            })
+
+        if not rows:
+            raise ValueError("聚合后无有效样本")
+        # 默认按户数变化升序（降幅最大的在前），前端可任意列重排
+        rows.sort(key=lambda x: (x["holder_chg"] is None,
+                                 x["holder_chg"] if x["holder_chg"] is not None else 0))
+        print(f"  ✅ 筹码动向 {len(rows)} 只（{periods[0]} vs {periods[1] if len(periods) > 1 else '无'}）")
+        return {
+            "period": periods[0] if periods else "",
+            "prev_period": periods[1] if len(periods) > 1 else None,
+            "rows": rows,
+        }
+    except Exception as e:
+        print(f"  ❌ 筹码动向合成失败: {e}")
         return None
 
 
@@ -680,9 +748,26 @@ def build_holder_distribution(stocks):
 
         print(f"  ✅ 户数存量分布: {total_n} 只 / 总户数 {total_holders/1e8:.2f} 亿，{len(buckets)} 档")
 
+        # ── 机构持股：两期映射只拉一次，供给侧数据（持股结构）和筹码动向表共用 ──
+        periods = _orghold_periods()
+        if not periods:
+            raise ValueError("无法获取机构持股报告期")
+        cur_period = periods[0]
+        prev_period = periods[1] if len(periods) > 1 else None
+        total_map = _orghold_ratio_map(cur_period, ORGHOLD_ORG_TOTAL)
+        legal_map = _orghold_ratio_map(cur_period, ORGHOLD_ORG_LEGAL)
+        prev_total = _orghold_ratio_map(prev_period, ORGHOLD_ORG_TOTAL) if prev_period else {}
+        prev_legal = _orghold_ratio_map(prev_period, ORGHOLD_ORG_LEGAL) if prev_period else {}
+
         # 主力 / 大股东法人 / 散户及其他 —— 三段持股结构（真正的占比，与股价无关）
         holders_map = {r.get("SECURITY_CODE"): int(r.get("HOLDER_NUM") or 0) for r in rows}
-        ownership = build_ownership_structure(by_code, holders_map)
+        ownership = build_ownership_structure(by_code, holders_map, total_map, legal_map)
+        if ownership:
+            ownership["period"] = cur_period
+
+        # 筹码动向表：户数变化 × 主力持股 × 环比（前端可排序）
+        chip_flow = build_chip_flow(by_code, rows, periods,
+                                    total_map, legal_map, prev_total, prev_legal)
 
         return {
             "version": HOLDER_DIST_VERSION,
@@ -691,6 +776,7 @@ def build_holder_distribution(stocks):
             "window": f"{window_start} ~ {latest}",
             "buckets": buckets,
             "ownership": ownership,
+            "chip_flow": chip_flow,
         }
     except Exception as e:
         print(f"  ❌ 户数存量分布抓取失败: {e}")

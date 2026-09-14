@@ -939,6 +939,16 @@ td.code-cell { color: var(--dim); font-size: 10px; }
 .dist-tiers .t-medium { color: var(--cyan); }
 .dist-tiers .t-main { color: var(--blue); }
 
+/* ═══ 筹码动向表（可排序） ═══ */
+.chip-box { height: 600px; }
+.chip-note {
+  margin: 0 0 10px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--dim);
+  font-family: 'Noto Sans SC', sans-serif;
+}
+
 /* ═══ Compliance Footer ═══ */
 .compliance-footer {
   margin-top: 40px;
@@ -1250,6 +1260,22 @@ td.code-cell { color: var(--dim); font-size: 10px; }
 
   <p class="holder-note" id="holderPerCapitaNote"></p>
 
+  <!-- ═══════ 筹码动向（点表头排序） ═══════ -->
+  <div class="section-header">
+    <h2>筹码动向</h2>
+    <span class="freq-tag quarterly"><span class="freq-tag-dot"></span>点表头切换升 / 降序 · 覆盖全市场</span>
+  </div>
+
+  <div class="table-box chip-box">
+    <p class="chip-note" id="chipNote"></p>
+    <table>
+      <thead id="chipHead"></thead>
+      <tbody id="chipBody">
+        <tr><td colspan="6" style="text-align:center;color:var(--dim);padding:40px;">加载中...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
   <!-- ═══════ 户数存量分布 ═══════ -->
   <div class="dist-box">
     <h3>户数存量分布 <span class="dist-meta" id="holderDistMeta">--</span></h3>
@@ -1367,6 +1393,7 @@ function render() {
   renderFlow();
   renderShareholders();
   renderHolderPerCapita();
+  renderChipFlow();
   renderHolderDist();
 }
 
@@ -1669,6 +1696,92 @@ function renderHolderDist() {
     '</tr>';
   }
   body.innerHTML = html;
+}
+
+// 筹码动向：一行一只股票，把「户数变化 × 主力持股 × 主力环比」合成一张可排序表
+let chipSortCol = 'holder_chg', chipSortAsc = true;
+const CHIP_COLS = [
+  {key: 'name',       label: '股票'},
+  {key: 'holder_chg', label: '户数变化'},
+  {key: 'holders',    label: '股东户数'},
+  {key: 'inst_pct',   label: '主力持股'},
+  {key: 'inst_delta', label: '主力环比'},
+  {key: 'retail_pct', label: '散户及其他'},
+];
+
+function chipSortTable(col) {
+  if (chipSortCol === col) {
+    chipSortAsc = !chipSortAsc;
+  } else {
+    chipSortCol = col;
+    // 名称默认升序；其余默认降序（先看"最多/最高"那端）
+    chipSortAsc = (col === 'name' || col === 'holder_chg');
+  }
+  renderChipFlow();
+}
+
+function renderChipFlow() {
+  const head = document.getElementById('chipHead');
+  const body = document.getElementById('chipBody');
+  const note = document.getElementById('chipNote');
+  if (!head || !body) return;
+  const d = allData && allData.holder_distribution;
+  const cf = d && d.chip_flow;
+  const rows = (cf && cf.rows) || [];
+  if (!rows.length) {
+    head.innerHTML = '';
+    body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--dim)">暂无数据</td></tr>';
+    if (note) note.textContent = '';
+    return;
+  }
+  head.innerHTML = '<tr>' + CHIP_COLS.map(c => {
+    let cls = 'sortable';
+    cls += chipSortCol === c.key ? (chipSortAsc ? ' sort-asc' : ' sort-desc') : ' sort-none';
+    return '<th class="' + cls + '" onclick="chipSortTable(\'' + c.key + '\')">'
+      + c.label + '<span class="sort-icon"></span></th>';
+  }).join('') + '</tr>';
+
+  const col = chipSortCol, asc = chipSortAsc;
+  const sorted = rows.slice().sort((a, b) => {
+    let va = a[col], vb = b[col];
+    if (col === 'name') {
+      return asc ? String(va).localeCompare(String(vb), 'zh-CN')
+                 : String(vb).localeCompare(String(va), 'zh-CN');
+    }
+    const na = va === null || va === undefined, nb = vb === null || vb === undefined;
+    if (na && nb) return 0;
+    if (na) return 1;      // 无数据的行永远沉底
+    if (nb) return -1;
+    return asc ? Number(va) - Number(vb) : Number(vb) - Number(va);
+  });
+
+  const shown = sorted.slice(0, 300);
+  const aCol = (v, color) => v === null || v === undefined
+    ? '<td style="color:var(--dim)">--</td>'
+    : '<td style="color:' + color(v) + '">' + (v > 0 ? '+' : '') + v.toFixed(1) + '%</td>';
+  let html = '';
+  for (const x of shown) {
+    html += '<tr>' +
+      '<td class="name-cell">' + x.name + '</td>' +
+      aCol(x.holder_chg, v => v > 0 ? 'var(--red)' : v < 0 ? 'var(--green)' : 'var(--dim)') +
+      '<td>' + (x.holders ? x.holders.toLocaleString() : '--') + '</td>' +
+      '<td style="color:var(--blue)">' + (x.inst_pct || 0).toFixed(2) + '%</td>' +
+      '<td style="color:' + (x.inst_delta === null || x.inst_delta === undefined ? 'var(--dim)'
+        : x.inst_delta > 0 ? 'var(--blue)' : x.inst_delta < 0 ? 'var(--green)' : 'var(--dim)') + '">' +
+        (x.inst_delta === null || x.inst_delta === undefined ? '--'
+          : (x.inst_delta > 0 ? '+' : '') + x.inst_delta.toFixed(2) + 'pp') + '</td>' +
+      '<td style="color:var(--red)">' + (x.retail_pct || 0).toFixed(2) + '%</td>' +
+    '</tr>';
+  }
+  body.innerHTML = html;
+
+  if (note) {
+    note.textContent = '共 ' + rows.length.toLocaleString() + ' 只，已按当前排序显示前 ' + shown.length + ' 行｜'
+      + '户数变化 = 股东户数环比（披露口径）；主力持股 = 投资机构占流通股比（'
+      + (cf.period || '--') + '）；主力环比 = 与上一报告期（' + (cf.prev_period || '--') + '）的百分点差；'
+      + '散户及其他 = 100% − 机构汇总。'
+      + '典型读法：户数下降 + 主力环比上升 = 筹码在向机构集中；户数上升 + 主力环比下降 = 筹码在向散户扩散。';
+  }
 }
 
 function filterTable() {
