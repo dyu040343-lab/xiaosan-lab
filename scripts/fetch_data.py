@@ -345,23 +345,18 @@ HOLDER_COLUMNS = ("SECURITY_CODE,SECURITY_NAME_ABBR,END_DATE,HOLDER_NUM,PRE_HOLD
                   "HOLDER_NUM_CHANGE,HOLDER_NUM_RATIO,HOLD_NOTICE_DATE,"
                   "AVG_MARKET_CAP,AVG_HOLD_NUM,TOTAL_MARKET_CAP,INTERVAL_CHRATE")
 
-# 股东户数「存量」分档（用于全市场分布统计）
-# 注意：档位文案不要用 < / >，前端是直接拼进 HTML 的
-HOLDER_BUCKETS = [
-    ("1 万以下", 0, 10000),
-    ("1 万 ~ 5 万", 10000, 50000),
-    ("5 万 ~ 20 万", 50000, 200000),
-    ("20 万以上", 200000, None),
-]
+# 户数变化的有效性门槛 —— 防次新股上市首期把比例算成天文数字
+# 上市前公司只有发起人股东（上期户数常常只有 4~24 户），上市后一夜变成几万户，
+# 算出来就是 +810100% 这种毫无意义的比例。北交所 920 开头的新股是高发区。
+HOLDER_MIN_PRE_NUM = 1000       # 上期户数下限：低于此视为披露口径不可比
+HOLDER_CHG_LIMIT = 1000.0       # 变化幅度上限（+1000%）；另剔除 ≤ -99.99% 的异常
 
-# 分档口径版本号：改了结构就 +1，让当天缓存失效重算
-HOLDER_DIST_VERSION = 6
+# 口径版本号：改了结构就 +1，让当天缓存失效重算
+HOLDER_DIST_VERSION = 7
 
-# 机构持股结构（主力 / 大股东法人 / 散户）榜单
-OWNERSHIP_TOP_N = 20
-OWNERSHIP_MIN_HOLDERS = 5000   # 散户扎堆榜的最低股东户数（用于剔除并列噪声并做二次排序）
+# 机构持股分类（RPT_MAIN_ORGHOLD 的 ORG_TYPE）
 ORGHOLD_ORG_TOTAL = "00"   # 机构汇总 = 机构 + 一般法人 合计占流通股比
-ORGHOLD_ORG_LEGAL = "07"   # 其他 = 一般法人（大股东 / 产业资本）占流通股比
+ORGHOLD_ORG_LEGAL = "07"   # 其他 = 一般法人（大股东 / 产业资本）+ 陆股通等未单独分类的机构
 
 # 筹码动向表（前端可排序，只渲染排序后的前 N 行；数据仍覆盖全市场）
 CHIP_FLOW_MAX_ROWS = 300
@@ -405,99 +400,6 @@ def _holder_latest_and_window():
         raise ValueError("无法获取最新披露日")
     start = (datetime.strptime(latest, "%Y-%m-%d") - timedelta(days=180)).strftime("%Y-%m-%d")
     return latest, start
-
-
-def fetch_shareholder_count():
-    """从东方财富数据中心获取股东户数变化数据（增幅榜 + 减幅榜）
-
-    接口：RPT_HOLDERNUMLATEST —— 每只股票在该表里只有一条「最新」披露记录。
-
-    三个必须注意的点（否则前端「户数减少 TOP」恒为空 / 榜单被垃圾数据污染）：
-    1. **必须双向请求**：接口只返回第一页，按 HOLDER_NUM_RATIO 降序拿到的 200 条
-       全是正值，减幅榜自然一条都筛不出来。所以要再按升序请求一次拿减幅榜。
-    2. **必须剔除伪比例**：次新股上市后户数从「4 户 / 60 户」这种极小基数暴增，
-       比例能算到 +576 万 %，完全无意义。用上期户数门槛（PRE_HOLDER_NUM >= 1000）剔除。
-    3. **必须限制披露窗口**：退市 / 停更股票的记录停留在数年前，用「最新披露日 - 180 天」
-       作为窗口，只保留仍在正常披露的股票。
-    """
-    print("🔍 正在从东方财富获取股东户数变化数据...")
-    try:
-        # 1) 最新披露日 → 有效性窗口
-        latest, window_start = _holder_latest_and_window()
-
-        # 2) 有效样本过滤：上期户数 ≥1000（剔除次新股伪比例）+ 当期户数 ≥5000 + 披露日在窗口内
-        flt = (f"(PRE_HOLDER_NUM>=1000)(HOLDER_NUM>=5000)"
-               f"(END_DATE>='{window_start}')")
-
-        # 3) 双向请求：降序 = 增幅榜，升序 = 减幅榜
-        inc_rows = _holder_query({"sortColumns": "HOLDER_NUM_RATIO", "sortTypes": "-1", "filter": flt})
-        dec_rows = _holder_query({"sortColumns": "HOLDER_NUM_RATIO", "sortTypes": "1", "filter": flt})
-
-        seen, stocks = set(), []
-        for item in inc_rows + dec_rows:
-            code = (item.get("SECURITY_CODE") or "").strip()
-            name = (item.get("SECURITY_NAME_ABBR") or "").strip()
-            ratio = item.get("HOLDER_NUM_RATIO")
-            if not code or not name or ratio is None or code in seen:
-                continue
-            pct = round(float(ratio), 2)
-            # 户数变化超过 10 倍的记录基本是次新股 / 上市口径差异造成，与「筹码集中分散」无关
-            if pct <= -99.99 or pct >= 1000:
-                continue
-            seen.add(code)
-            end_date = (item.get("END_DATE") or "")[:10]
-            stocks.append({
-                "code": code,
-                "name": name,
-                "current": int(item.get("HOLDER_NUM") or 0),
-                "previous": int(item.get("PRE_HOLDER_NUM") or 0),
-                "increase": int(item.get("HOLDER_NUM_CHANGE") or 0),
-                "change_pct": pct,
-                "period": end_date[:7],
-                "avg_market_cap": round(float(item.get("AVG_MARKET_CAP") or 0), 2),
-                "total_market_cap": round(float(item.get("TOTAL_MARKET_CAP") or 0), 2),
-                "interval_chg": round(float(item.get("INTERVAL_CHRATE") or 0), 2),
-                "notice_date": (item.get("HOLD_NOTICE_DATE") or "")[:10],
-            })
-
-        if not stocks:
-            print("  ⚠️ API返回空，使用备用数据")
-            return _fallback_shareholder_data()
-
-        stocks.sort(key=lambda x: x["change_pct"], reverse=True)
-        n_up = sum(1 for s in stocks if s["change_pct"] > 0)
-        n_down = sum(1 for s in stocks if s["change_pct"] < 0)
-        print(f"  ✅ 股东户数 {len(stocks)} 条（增幅 {n_up} / 减幅 {n_down}，窗口 {window_start}~{latest}）")
-        return stocks
-
-    except Exception as e:
-        print(f"  ❌ 东方财富API失败: {e}")
-        return _fallback_shareholder_data()
-
-
-def _fallback_shareholder_data():
-    print("  ⚠️ 使用备用股东户数数据")
-    fallback = [
-        {"code": "000725", "name": "京东方A", "current": 1897600, "previous": 971900, "increase": 925600, "change_pct": 95.23, "period": "2026Q2", "avg_market_cap": 8.5, "total_market_cap": 1613, "interval_chg": 121.99, "notice_date": "2026-08-30"},
-        {"code": "600522", "name": "中天科技", "current": 818100, "previous": 226200, "increase": 591900, "change_pct": 261.64, "period": "2026Q2", "avg_market_cap": 12.3, "total_market_cap": 1006, "interval_chg": 85.32, "notice_date": "2026-08-28"},
-        {"code": "600584", "name": "长电科技", "current": 804000, "previous": 304000, "increase": 500000, "change_pct": 164.54, "period": "2026Q2", "avg_market_cap": 45.6, "total_market_cap": 3666, "interval_chg": 78.45, "notice_date": "2026-08-29"},
-        {"code": "600378", "name": "昊华科技", "current": 152400, "previous": 27300, "increase": 125100, "change_pct": 457.26, "period": "2026Q2", "avg_market_cap": 28.7, "total_market_cap": 437, "interval_chg": 45.23, "notice_date": "2026-08-25"},
-        {"code": "603203", "name": "快克智能", "current": 64300, "previous": 14700, "increase": 49600, "change_pct": 335.83, "period": "2026Q2", "avg_market_cap": 35.2, "total_market_cap": 226, "interval_chg": 67.89, "notice_date": "2026-08-22"},
-        {"code": "600707", "name": "彩虹股份", "current": 268900, "previous": 71000, "increase": 197900, "change_pct": 278.83, "period": "2026Q2", "avg_market_cap": 15.8, "total_market_cap": 425, "interval_chg": 92.56, "notice_date": "2026-08-26"},
-        {"code": "603986", "name": "兆易创新", "current": 360300, "previous": 243800, "increase": 116500, "change_pct": 47.81, "period": "2026Q2", "avg_market_cap": 85.3, "total_market_cap": 3073, "interval_chg": -12.34, "notice_date": "2026-08-27"},
-        {"code": "300308", "name": "中际旭创", "current": 205700, "previous": 154400, "increase": 51300, "change_pct": 33.20, "period": "2026Q2", "avg_market_cap": 156.7, "total_market_cap": 3224, "interval_chg": -8.76, "notice_date": "2026-08-28"},
-        {"code": "300476", "name": "胜宏科技", "current": 281400, "previous": 206000, "increase": 75400, "change_pct": 36.60, "period": "2026Q2", "avg_market_cap": 42.1, "total_market_cap": 1185, "interval_chg": -5.43, "notice_date": "2026-08-26"},
-        {"code": "000021", "name": "深科技", "current": 489589, "previous": 503900, "increase": -14311, "change_pct": -2.84, "period": "2026-08", "avg_market_cap": 22.5, "total_market_cap": 1102, "interval_chg": -3.21, "notice_date": "2026-09-01"},
-        {"code": "300615", "name": "欣天科技", "current": 18700, "previous": 13760, "increase": 4940, "change_pct": 35.94, "period": "2026-08", "avg_market_cap": 18.6, "total_market_cap": 35, "interval_chg": 15.67, "notice_date": "2026-09-02"},
-        {"code": "300006", "name": "莱美药业", "current": 29000, "previous": 23667, "increase": 5333, "change_pct": 22.56, "period": "2026-08", "avg_market_cap": 6.8, "total_market_cap": 20, "interval_chg": 8.92, "notice_date": "2026-09-03"},
-        {"code": "600519", "name": "贵州茅台", "current": 218600, "previous": 265400, "increase": -46800, "change_pct": -17.63, "period": "2026-06", "avg_market_cap": 1250.4, "total_market_cap": 15520, "interval_chg": -9.87, "notice_date": "2026-08-29"},
-        {"code": "601318", "name": "中国平安", "current": 1163400, "previous": 1358900, "increase": -195500, "change_pct": -14.39, "period": "2026-06", "avg_market_cap": 118.7, "total_market_cap": 9860, "interval_chg": -6.52, "notice_date": "2026-08-28"},
-        {"code": "000858", "name": "五粮液", "current": 412000, "previous": 468300, "increase": -56300, "change_pct": -12.02, "period": "2026-06", "avg_market_cap": 342.6, "total_market_cap": 4210, "interval_chg": -4.11, "notice_date": "2026-08-30"},
-        {"code": "002594", "name": "比亚迪", "current": 755000, "previous": 718600, "increase": 36400, "change_pct": 5.06, "period": "2026Q2", "avg_market_cap": 85.2, "total_market_cap": 6433, "interval_chg": -2.15, "notice_date": "2026-08-30"},
-        {"code": "000977", "name": "浪潮信息", "current": 245000, "previous": 198000, "increase": 47000, "change_pct": 23.74, "period": "2026Q2", "avg_market_cap": 98.5, "total_market_cap": 2413, "interval_chg": 12.34, "notice_date": "2026-08-29"},
-    ]
-    fallback.sort(key=lambda x: x["change_pct"], reverse=True)
-    return fallback
 
 
 def _orghold_query(extra, page_size=500, page_number=1):
@@ -561,63 +463,6 @@ def _orghold_periods():
     return [p for p in (cur, prev) if p]
 
 
-def build_ownership_structure(by_code, holders_map, total_map, legal_map):
-    """主力 / 大股东法人 / 散户及其他 —— 三段持股结构（占流通股比）
-
-    数据源：东财数据中心 RPT_MAIN_ORGHOLD（机构持股，季度披露）。
-    这才是真正的「占比」——它是持股比例，与股价无关，能用来看筹码在谁手里：
-
-    - `ORG_TYPE="00"` 机构汇总 → 机构 + 一般法人 合计占流通股比
-    - `ORG_TYPE="07"` 其他     → 一般法人（大股东 / 产业资本）占流通股比
-    - **主力（投资机构）= 汇总 − 其他**（即 基金 + QFII + 社保 + 券商 + 保险 + 信托）
-    - **散户及其他 = 100 − 汇总**（未披露在机构名单里的账户，绝大多数是散户）
-    """
-    print("🔍 正在汇总机构持股结构（主力/法人/散户）...")
-    try:
-        items = []
-        for code, (total, orgs) in total_map.items():
-            if code not in by_code:
-                continue
-            legal = legal_map.get(code, (0.0, 0))[0]
-            if not (0 <= total <= 100.5) or not (0 <= legal <= 100.5):
-                continue
-            items.append({
-                "code": code,
-                "name": by_code[code].get("name", ""),
-                "inst_pct": round(max(total - legal, 0.0), 2),
-                "legal_pct": round(legal, 2),
-                "retail_pct": round(max(100 - total, 0.0), 2),
-                "orgs": orgs,
-                "holders": holders_map.get(code, 0),
-            })
-
-        if not items:
-            raise ValueError("聚合后无有效样本")
-
-        # 主力控盘：机构投资占比最高
-        main_top = sorted(items, key=lambda x: (-x["inst_pct"], -x["orgs"]))[:OWNERSHIP_TOP_N]
-        # 散户扎堆：散户占比最高。大量小票的散户占比正好是 100%，会挤成一大片并列，
-        # 所以先剔除两类噪声，再用「股东户数」做二次排序（户数越多越散）：
-        #   ① 有机构家数却占流通比为 0 —— 东财数据自相矛盾（次新股 / 流通股未定义）
-        #   ② 没有股东户数记录 —— 无法判断真实分散程度
-        pool = [x for x in items
-                if x["holders"] >= OWNERSHIP_MIN_HOLDERS
-                and not (x["inst_pct"] + x["legal_pct"] <= 0.0001 and x["orgs"] >= 5)]
-        retail_top = sorted(pool, key=lambda x: (-x["retail_pct"], -x["holders"]))[:OWNERSHIP_TOP_N]
-
-        print(f"  ✅ 持股结构 {len(items)} 只｜主力最高 {main_top[0]['name']} {main_top[0]['inst_pct']}%"
-              f"｜散户最高 {retail_top[0]['name']} {retail_top[0]['retail_pct']}%（户数 {retail_top[0]['holders']:,}）")
-        return {
-            "sample": len(items),
-            "min_holders": OWNERSHIP_MIN_HOLDERS,
-            "main_top": main_top,
-            "retail_top": retail_top,
-        }
-    except Exception as e:
-        print(f"  ❌ 持股结构汇总失败: {e}")
-        return None
-
-
 def build_chip_flow(by_code, holder_rows, periods, total_map, legal_map, prev_total, prev_legal):
     """筹码动向表（前端可排序，一行一只股票，全市场覆盖）
 
@@ -629,17 +474,28 @@ def build_chip_flow(by_code, holder_rows, periods, total_map, legal_map, prev_to
     - `retail_pct`  散户及其他占流通比      ← 散户锚点
 
     典型读法：户数降 + 主力环比升 = 筹码在向机构集中（吸筹）
+
+    注意 `holder_chg` 有一道**有效性闸门**：上期户数低于 HOLDER_MIN_PRE_NUM 或幅度
+    超过 HOLDER_CHG_LIMIT 的记录一律置为 None（不是 0），前端显示 `--` 并排到末尾。
+    否则北交所新股那种「10 户 → 81,020 户 = +810100%」会霸占默认的升/降序榜首。
     """
-    print("🔍 正在合成筹码动向表（户数变化 × 主力持股 ÷ 环比）...")
+    print("🔍 正在合成筹码动向表（户数变化 × 主力持股 × 环比）...")
     try:
         holder_map = {}
+        invalid_chg = 0
         for r in holder_rows:
             code = r.get("SECURITY_CODE")
             if not code:
                 continue
             ratio = r.get("HOLDER_NUM_RATIO")
-            holder_map[code] = (int(r.get("HOLDER_NUM") or 0),
-                                round(float(ratio), 2) if ratio is not None else None)
+            chg = round(float(ratio), 2) if ratio is not None else None
+            prev_num = int(r.get("PRE_HOLDER_NUM") or 0)
+            # 次新股上市首期：上市前只有发起人账户（上期常常只有几户），口径不可比
+            if chg is not None and (prev_num < HOLDER_MIN_PRE_NUM
+                                    or chg >= HOLDER_CHG_LIMIT or chg <= -99.99):
+                chg = None
+                invalid_chg += 1
+            holder_map[code] = (int(r.get("HOLDER_NUM") or 0), chg)
 
         rows = []
         for code, (total, orgs) in total_map.items():
@@ -672,7 +528,8 @@ def build_chip_flow(by_code, holder_rows, periods, total_map, legal_map, prev_to
         # 默认按户数变化升序（降幅最大的在前），前端可任意列重排
         rows.sort(key=lambda x: (x["holder_chg"] is None,
                                  x["holder_chg"] if x["holder_chg"] is not None else 0))
-        print(f"  ✅ 筹码动向 {len(rows)} 只（{periods[0]} vs {periods[1] if len(periods) > 1 else '无'}）")
+        print(f"  ✅ 筹码动向 {len(rows)} 只（{periods[0]} vs {periods[1] if len(periods) > 1 else '无'}）"
+              f"｜户数变化不可比已剔除 {invalid_chg} 只")
         return {
             "period": periods[0] if periods else "",
             "prev_period": periods[1] if len(periods) > 1 else None,
@@ -683,18 +540,17 @@ def build_chip_flow(by_code, holder_rows, periods, total_map, legal_map, prev_to
         return None
 
 
-def build_holder_distribution(stocks):
-    """全市场股东户数「存量」分布（按户数分档，含各档资金构成）
+def build_holder_chip(stocks):
+    """股东户数 × 持股结构 数据集 —— 只产出「筹码动向」可排序表
 
-    与「户数变化榜」不同，这里要的是**存量**：不管涨了还是跌了，只看
-    「每只股票现在有多少户」，据此统计全市场分布。
+    一次把两个数据源准备好，前端读 `holder_chip.chip_flow`：
 
-    - 需要全量拉取（接口单页上限 500 条 → 约 11 页），单次约 1.4MB
-    - 股东户数是季度数据，没必要每 10 分钟重抓 → main() 里做了「同一天复用一次」的缓存
-    - 各档的「资金构成」由当日三档净额按 |净额| 加权算出，用来观察
-      不同户数规模（≈筹码分散程度）的股票，资金结构有没有差别
+    - 股东户数（RPT_HOLDERNUMLATEST，全量分页 ~11 页 / 约 1.4MB）→ 户数变化、股东户数
+    - 机构持股（RPT_MAIN_ORGHOLD，本期 + 上期两期）→ 主力持股、主力环比、散户及其他
+
+    股东户数是季度数据，没必要每 10 分钟重抓 → main() 里做了「同一天复用一次」的缓存。
     """
-    print("🔍 正在获取全市场股东户数存量分布...")
+    print("🔍 正在获取全市场股东户数 / 机构持股...")
     try:
         latest, window_start = _holder_latest_and_window()
         flt = f"(HOLDER_NUM>0)(END_DATE>='{window_start}')"
@@ -714,41 +570,8 @@ def build_holder_distribution(stocks):
             raise ValueError("未取到户数数据")
 
         by_code = {s["code"]: s for s in stocks}
-        total_n = len(rows)
-        total_holders = sum(int(r.get("HOLDER_NUM") or 0) for r in rows)
 
-        buckets = []
-        for label, lo, hi in HOLDER_BUCKETS:
-            grp = [r for r in rows
-                   if lo <= int(r.get("HOLDER_NUM") or 0)
-                   and (hi is None or int(r.get("HOLDER_NUM") or 0) < hi)]
-            if not grp:
-                continue
-            holders = sum(int(r.get("HOLDER_NUM") or 0) for r in grp)
-            # 该档的资金构成：三档 |净额| 加权
-            ra = ma = na = 0.0
-            for r in grp:
-                s = by_code.get(r.get("SECURITY_CODE"))
-                if not s:
-                    continue
-                ra += abs(s.get("retail_net", 0))
-                ma += abs(s.get("medium_net", 0))
-                na += abs(s.get("main_net", 0))
-            tt = ra + ma + na
-            buckets.append({
-                "label": label,
-                "count": len(grp),
-                "count_pct": round(len(grp) / total_n * 100, 1),
-                "holders": holders,
-                "holders_pct": round(holders / total_holders * 100, 1) if total_holders else 0,
-                "retail_pct": round(ra / tt * 100, 1) if tt > 0 else 0,
-                "medium_pct": round(ma / tt * 100, 1) if tt > 0 else 0,
-                "main_pct": round(na / tt * 100, 1) if tt > 0 else 0,
-            })
-
-        print(f"  ✅ 户数存量分布: {total_n} 只 / 总户数 {total_holders/1e8:.2f} 亿，{len(buckets)} 档")
-
-        # ── 机构持股：两期映射只拉一次，供给侧数据（持股结构）和筹码动向表共用 ──
+        # ── 机构持股：两期映射只拉一次，供筹码动向表使用 ──
         periods = _orghold_periods()
         if not periods:
             raise ValueError("无法获取机构持股报告期")
@@ -759,39 +582,31 @@ def build_holder_distribution(stocks):
         prev_total = _orghold_ratio_map(prev_period, ORGHOLD_ORG_TOTAL) if prev_period else {}
         prev_legal = _orghold_ratio_map(prev_period, ORGHOLD_ORG_LEGAL) if prev_period else {}
 
-        # 主力 / 大股东法人 / 散户及其他 —— 三段持股结构（真正的占比，与股价无关）
-        holders_map = {r.get("SECURITY_CODE"): int(r.get("HOLDER_NUM") or 0) for r in rows}
-        ownership = build_ownership_structure(by_code, holders_map, total_map, legal_map)
-        if ownership:
-            ownership["period"] = cur_period
-
         # 筹码动向表：户数变化 × 主力持股 × 环比（前端可排序）
         chip_flow = build_chip_flow(by_code, rows, periods,
                                     total_map, legal_map, prev_total, prev_legal)
+        if not chip_flow:
+            raise ValueError("筹码动向表合成失败")
 
         return {
             "version": HOLDER_DIST_VERSION,
-            "total_stocks": total_n,
-            "total_holders": total_holders,
             "window": f"{window_start} ~ {latest}",
-            "buckets": buckets,
-            "ownership": ownership,
             "chip_flow": chip_flow,
         }
     except Exception as e:
-        print(f"  ❌ 户数存量分布抓取失败: {e}")
+        print(f"  ❌ 持股/户数数据集抓取失败: {e}")
         return None
 
 
-def load_today_distribution():
-    """复用当天已抓取的户数分布（季度数据，避免每 10 分钟重复下载全量）"""
+def load_today_chip():
+    """复用当天已抓取的数据集（季度数据，避免每 10 分钟重复下载全量）"""
     try:
         with open(f"{OUTPUT_DIR}/radar_data.json", "r", encoding="utf-8") as f:
             prev = json.load(f)
-        d = prev.get("holder_distribution") or {}
+        d = prev.get("holder_chip") or {}
         if (d.get("date") == datetime.now().strftime("%Y-%m-%d")
                 and d.get("version") == HOLDER_DIST_VERSION
-                and d.get("buckets")):
+                and d.get("chip_flow")):
             return d
     except Exception:
         pass
@@ -857,17 +672,16 @@ def calc_overview(stocks):
 
 def main():
     retail_flow, data_status = fetch_retail_money_flow()
-    shareholder_count = fetch_shareholder_count()
     overview = calc_overview(retail_flow)
 
-    # 户数存量分布：季度数据，同一天只抓一次（避免每 10 分钟下载 1.4MB 全量）
-    holder_distribution = load_today_distribution()
-    if holder_distribution:
-        print("  ♻️ 复用当天已抓取的户数存量分布")
+    # 股东户数 + 机构持股：季度数据，同一天只抓一次（避免每 10 分钟下载 1.4MB 全量）
+    holder_chip = load_today_chip()
+    if holder_chip:
+        print("  ♻️ 复用当天已抓取的股东户数 / 持股数据")
     else:
-        holder_distribution = build_holder_distribution(retail_flow)
-        if holder_distribution:
-            holder_distribution["date"] = datetime.now().strftime("%Y-%m-%d")
+        holder_chip = build_holder_chip(retail_flow)
+        if holder_chip:
+            holder_chip["date"] = datetime.now().strftime("%Y-%m-%d")
 
     status_labels = {"live": "实时数据", "cached": "收盘数据（缓存）", "static": "估算数据"}
     overview["update_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -877,8 +691,7 @@ def main():
     output = {
         "overview": overview,
         "retail_flow": retail_flow,
-        "shareholder_count": shareholder_count,
-        "holder_distribution": holder_distribution,
+        "holder_chip": holder_chip,
         "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "data_source": "东方财富push2接口" if data_status == "live" else ("缓存数据" if data_status == "cached" else "估算数据"),
         "data_status": data_status,
@@ -901,11 +714,10 @@ def main():
     ts = overview['tier_share']
     print(f"📊 三档占比: 散户{ts['retail_pct']}% · 中单{ts['medium_pct']}% · 主力{ts['main_pct']}%（按|净额|之和加权，总和{ts['tier_total']}亿）")
     print(f"📈 四档: 超大单{overview['super_total']}亿 | 大单{overview['large_total']}亿 | 中单{overview['medium_total']}亿 | 小单{overview['small_total']}亿")
-    print(f"👥 股东户数: {len(shareholder_count)} 条")
-    if holder_distribution:
-        print(f"📦 户数存量分布: {holder_distribution['total_stocks']} 只 / 总户数 {holder_distribution['total_holders']/1e8:.2f} 亿")
-        for b in holder_distribution["buckets"]:
-            print(f"   {b['label']:<12} {b['count']:>5} 只（{b['count_pct']}%） 户数占比 {b['holders_pct']}% 资金构成 {b['retail_pct']}/{b['medium_pct']}/{b['main_pct']}")
+    if holder_chip and holder_chip.get("chip_flow"):
+        cf = holder_chip["chip_flow"]
+        n_na = sum(1 for x in cf["rows"] if x["holder_chg"] is None)
+        print(f"📦 筹码动向: {len(cf['rows'])} 只（{cf['period']} vs {cf.get('prev_period') or '无'}）｜户数变化不可比 {n_na} 只")
     print("=" * 50)
 
 

@@ -788,62 +788,6 @@ td.code-cell { color: var(--dim); font-size: 10px; }
 
 .mini-fill { height: 100%; border-radius: 2px; }
 
-/* ═══ 户数存量分布 ═══ */
-.dist-box {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 14px 16px;
-  margin-top: 16px;
-}
-.dist-box h3 {
-  margin: 0 0 10px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-hi);
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.dist-box h3 .dist-meta {
-  font-size: 11px;
-  font-weight: 400;
-  color: var(--dim);
-  font-family: 'JetBrains Mono', monospace;
-}
-.dist-table { width: 100%; border-collapse: collapse; font-size: 11px; }
-.dist-table th {
-  text-align: left;
-  padding: 6px 8px;
-  color: var(--dim);
-  font-weight: 500;
-  border-bottom: 1px solid var(--border);
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  white-space: nowrap;
-}
-.dist-table td {
-  padding: 8px;
-  border-bottom: 1px solid var(--border);
-  font-family: 'JetBrains Mono', monospace;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.dist-table td.dist-label {
-  font-family: 'Noto Sans SC', sans-serif;
-  font-weight: 600;
-  color: var(--text-hi);
-}
-.dist-bar-cell { display: flex; align-items: center; gap: 7px; min-width: 104px; }
-.dist-bar-cell .bar-track { flex: 1; height: 7px; }
-.dist-bar-cell .dist-pct { font-weight: 600; color: var(--text-hi); min-width: 40px; text-align: right; }
-.dist-tiers { display: flex; gap: 9px; }
-.dist-tiers .t-retail { color: var(--red); }
-.dist-tiers .t-medium { color: var(--cyan); }
-.dist-tiers .t-main { color: var(--blue); }
-
 /* ═══ 筹码动向表（可排序） ═══ */
 .chip-box { height: 600px; }
 .chip-note {
@@ -1133,26 +1077,6 @@ td.code-cell { color: var(--dim); font-size: 10px; }
     </table>
   </div>
 
-  <!-- ═══════ 户数存量分布 ═══════ -->
-  <div class="dist-box">
-    <h3>户数存量分布 <span class="dist-meta" id="holderDistMeta">--</span></h3>
-    <table class="dist-table">
-      <thead>
-        <tr>
-          <th style="text-align:left">户数档（存量）</th>
-          <th>股票只数</th>
-          <th>只数占比</th>
-          <th>合计户数</th>
-          <th>户数占比</th>
-          <th>该档资金构成 散户 / 中单 / 主力</th>
-        </tr>
-      </thead>
-      <tbody id="holderDistBody">
-        <tr><td colspan="6" style="text-align:center;color:var(--dim)">加载中...</td></tr>
-      </tbody>
-    </table>
-  </div>
-
   <!-- ═══════ Compliance Footer ═══════ -->
   <footer class="compliance-footer">
     <div class="footer-disclaimer">
@@ -1249,7 +1173,6 @@ function render() {
 
   renderFlow();
   renderChipFlow();
-  renderHolderDist();
 }
 
 function PRIMARY_FIELD() {
@@ -1454,50 +1377,6 @@ function renderTable(stocks, primaryField) {
   document.getElementById('tableBody').innerHTML = bodyHtml || '<tr><td colspan="' + ncols + '" style="text-align:center;color:var(--dim)">无匹配结果</td></tr>';
 }
 
-function fmtHolders(n) {
-  n = n || 0;
-  if (n >= 1e8) return (n / 1e8).toFixed(2) + ' 亿';
-  if (n >= 1e4) return (n / 1e4).toFixed(1) + ' 万';
-  return String(n);
-}
-
-// 户数存量分布：全市场按股东户数分档，含各档资金构成
-function renderHolderDist() {
-  const meta = document.getElementById('holderDistMeta');
-  const body = document.getElementById('holderDistBody');
-  if (!body) return;
-  const d = allData && allData.holder_distribution;
-  if (!d || !d.buckets || !d.buckets.length) {
-    if (meta) meta.textContent = '';
-    body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--dim)">暂无数据</td></tr>';
-    return;
-  }
-  if (meta) {
-    meta.textContent = '全市场 ' + d.total_stocks.toLocaleString() + ' 只 · 总户数 '
-      + fmtHolders(d.total_holders) + ' · 披露窗口 ' + d.window;
-  }
-  let html = '';
-  for (const b of d.buckets) {
-    const label = String(b.label).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    html += '<tr>' +
-      '<td class="dist-label">' + label + '</td>' +
-      '<td style="text-align:right">' + b.count.toLocaleString() + ' 只</td>' +
-      '<td><div class="dist-bar-cell">' +
-        '<div class="bar-track"><div class="bar-fill red" style="width:' + Math.min(b.count_pct, 100) + '%"></div></div>' +
-        '<span class="dist-pct">' + b.count_pct.toFixed(1) + '%</span>' +
-      '</div></td>' +
-      '<td style="text-align:right">' + fmtHolders(b.holders) + '</td>' +
-      '<td style="text-align:right">' + b.holders_pct.toFixed(1) + '%</td>' +
-      '<td><div class="dist-tiers">' +
-        '<span class="t-retail">散 ' + b.retail_pct.toFixed(1) + '%</span>' +
-        '<span class="t-medium">中 ' + b.medium_pct.toFixed(1) + '%</span>' +
-        '<span class="t-main">主 ' + b.main_pct.toFixed(1) + '%</span>' +
-      '</div></td>' +
-    '</tr>';
-  }
-  body.innerHTML = html;
-}
-
 // 筹码动向：一行一只股票，把「户数变化 × 主力持股 × 主力环比」合成一张可排序表
 let chipSortCol = 'holder_chg', chipSortAsc = true;
 const CHIP_COLS = [
@@ -1525,7 +1404,7 @@ function renderChipFlow() {
   const body = document.getElementById('chipBody');
   const note = document.getElementById('chipNote');
   if (!head || !body) return;
-  const d = allData && allData.holder_distribution;
+  const d = allData && allData.holder_chip;
   const cf = d && d.chip_flow;
   const rows = (cf && cf.rows) || [];
   if (!rows.length) {
@@ -1577,9 +1456,10 @@ function renderChipFlow() {
 
   if (note) {
     note.textContent = '共 ' + rows.length.toLocaleString() + ' 只，已按当前排序显示前 ' + shown.length + ' 行｜'
-      + '户数变化 = 股东户数环比（披露口径）；主力持股 = 投资机构占流通股比（'
+      + '户数变化 = 股东户数环比（披露口径，上市首期口径不可比的已置为 --）；主力持股 = 投资机构占流通股比（'
       + (cf.period || '--') + '）；主力环比 = 与上一报告期（' + (cf.prev_period || '--') + '）的百分点差；'
       + '散户及其他 = 100% − 机构汇总。'
+      + '口径提醒：陆股通（香港中央结算）与产业资本一并被东财归入「其他」，因此它们算在「机构汇总」一侧、不计入「散户及其他」。'
       + '典型读法：户数下降 + 主力环比上升 = 筹码在向机构集中；户数上升 + 主力环比下降 = 筹码在向散户扩散。';
   }
 }
