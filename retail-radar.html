@@ -754,6 +754,27 @@ td.name-cell {
   color: var(--text-hi);
 }
 
+/* 名称后的实时股价：价格 + 涨跌幅，颜色跟随涨跌（红涨绿跌） */
+td.name-cell .px {
+  margin-left: 7px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+td.name-cell .px-pct {
+  margin-left: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.9;
+}
+td.name-cell .px-none {
+  margin-left: 7px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--dim);
+}
+
 td.code-cell { color: var(--dim); font-size: 10px; }
 
 .price-up { color: var(--red); }
@@ -1120,7 +1141,7 @@ td.code-cell { color: var(--dim); font-size: 10px; }
       <table>
         <thead id="tableHead"></thead>
         <tbody id="tableBody">
-          <tr><td colspan="9" style="text-align:center;color:var(--dim);padding:40px;">加载中...</td></tr>
+          <tr><td colspan="6" style="text-align:center;color:var(--dim);padding:40px;">加载中...</td></tr>
         </tbody>
       </table>
     </div>
@@ -1399,6 +1420,7 @@ function renderChart(stocks, primaryField) {
 
 function renderTable(stocks, primaryField) {
   const isDynamic = currentTab === 'dynamic';
+  // 价格 / 涨跌已并入「名称」单元格（名称后面跟实时股价），不再单列
   const cols = isDynamic ? [
     {key: 'code', label: '代码'},
     {key: 'name', label: '名称'},
@@ -1406,8 +1428,6 @@ function renderTable(stocks, primaryField) {
     {key: 'medium_net', label: '中单净额'},
     {key: 'main_net', label: '主力净额'},
     {key: 'dynamic_ratio', label: '动态占比'},
-    {key: 'price', label: '价格'},
-    {key: 'change_pct', label: '涨跌'},
     {key: 'sector', label: '行业'},
   ] : [
     // 资金动向 tab：不含动态占比列，表格更清爽
@@ -1416,13 +1436,11 @@ function renderTable(stocks, primaryField) {
     {key: 'retail_net', label: '散户净额'},
     {key: 'medium_net', label: '中单净额'},
     {key: 'main_net', label: '主力净额'},
-    {key: 'price', label: '价格'},
-    {key: 'change_pct', label: '涨跌'},
     {key: 'sector', label: '行业'},
   ];
   // 当前资金视角列高亮（仅资金动向 tab；占比 tab 的 primaryField 恒为 retail_net，不参与高亮）
   const hlKey = (currentTab === 'flow') ? primaryField : null;
-  const ncols = isDynamic ? 9 : 8;
+  const ncols = isDynamic ? 7 : 6;
   let headHtml = '<tr>' + cols.map(c => {
     let cls = 'sortable';
     if (sortCol === c.key) cls += sortAsc ? ' sort-asc' : ' sort-desc';
@@ -1432,21 +1450,24 @@ function renderTable(stocks, primaryField) {
 
   let bodyHtml = '';
   for (const s of stocks) {
-    const cls = s.change_pct > 0 ? 'price-up' : s.change_pct < 0 ? 'price-down' : '';
     const r = s.retail_net || 0, m = s.medium_net || 0, mn = s.main_net || 0;
     // 散户/中单：红涨绿跌；主力：蓝涨绿跌（资金动向tab）
     const mainColor = mn >= 0 ? 'var(--blue)' : 'var(--green)';
     const isHL = (key) => key === hlKey ? ' class="col-highlight"' : '';
+    // 名称后的实时股价（红涨绿跌，平盘走灰）
+    const pxColor = s.change_pct > 0 ? 'var(--red)' : s.change_pct < 0 ? 'var(--green)' : 'var(--dim)';
+    const pxHtml = (s.price > 0)
+      ? '<span class="px" style="color:' + pxColor + '">' + s.price.toFixed(2) + '</span>'
+        + (s.change_pct ? '<span class="px-pct" style="color:' + pxColor + '">' + (s.change_pct > 0 ? '+' : '') + s.change_pct.toFixed(2) + '%</span>' : '')
+      : '<span class="px-none">--</span>';
     bodyHtml += '<tr>' +
       '<td class="code-cell">' + s.code + '</td>' +
-      '<td class="name-cell">' + s.name + '</td>' +
+      '<td class="name-cell">' + s.name + pxHtml + '</td>' +
       '<td' + isHL('retail_net') + ' style="color:' + (r >= 0 ? 'var(--red)' : 'var(--green)') + ';font-weight:600">' + (r >= 0 ? '+' : '') + r.toFixed(2) + '</td>' +
       '<td' + isHL('medium_net') + ' style="color:' + (m >= 0 ? 'var(--red)' : 'var(--green)') + ';font-weight:600">' + (m >= 0 ? '+' : '') + m.toFixed(2) + '</td>' +
       '<td' + isHL('main_net') + ' style="color:' + mainColor + '">' + (mn >= 0 ? '+' : '') + mn.toFixed(2) + '</td>' +
       (isDynamic ? '<td><div class="ratio-cell"><span style="color:' + ((s.dynamic_ratio||0) > 0 ? 'var(--purple)' : 'var(--blue)') + ';font-weight:600">' + (s.dynamic_ratio||0).toFixed(1) + '%</span>' +
         '<span class="mini-bar"><span class="mini-fill" style="width:' + Math.min(Math.abs(s.dynamic_ratio||0), 100) + '%;background:' + ((s.dynamic_ratio||0) > 0 ? 'var(--purple)' : 'var(--blue)') + '"></span></span></div></td>' : '') +
-      '<td>' + (s.price > 0 ? s.price.toFixed(2) : '--') + '</td>' +
-      '<td class="' + cls + '">' + (s.change_pct ? (s.change_pct > 0 ? '+' : '') + s.change_pct.toFixed(2) + '%' : '--') + '</td>' +
       '<td><span class="tag">' + s.sector + '</span></td>' +
     '</tr>';
   }
