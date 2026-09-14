@@ -21,7 +21,7 @@
       "tier_total": 1805.27
     },
     "total_stocks": 5913,
-    "update_time": "2026-09-14 03:33:50",
+    "update_time": "2026-09-14 03:36:30",
     "data_status": "live",
     "data_label": "实时数据"
   },
@@ -123476,7 +123476,7 @@
       "notice_date": "2026-08-12"
     }
   ],
-  "last_updated": "2026-09-14 03:33:50",
+  "last_updated": "2026-09-14 03:36:30",
   "data_source": "东方财富push2接口",
   "data_status": "live"
 }
