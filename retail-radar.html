@@ -788,101 +788,6 @@ td.code-cell { color: var(--dim); font-size: 10px; }
 
 .mini-fill { height: 100%; border-radius: 2px; }
 
-/* ═══ Shareholder Section ═══ */
-.shareholder-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  margin-bottom: 20px;
-}
-
-.sh-card {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 18px;
-  height: 400px;
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-hi) transparent;
-}
-
-.sh-card::-webkit-scrollbar { width: 4px; }
-.sh-card::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 2px; }
-
-.sh-card h4 {
-  font-size: 13px;
-  color: var(--text-hi);
-  margin-bottom: 12px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.sh-card h4 .sh-icon {
-  width: 8px; height: 8px;
-  border-radius: 50%;
-}
-
-.sh-card h4 .sh-icon.up { background: var(--red); box-shadow: 0 0 6px var(--red); }
-.sh-card h4 .sh-icon.down { background: var(--green); box-shadow: 0 0 6px var(--green); }
-.sh-card h4 .sh-icon.retail { background: var(--red); box-shadow: 0 0 6px var(--red); }
-.sh-card h4 .sh-icon.main { background: var(--blue); box-shadow: 0 0 6px var(--blue); }
-.sh-card h4 .sh-hint {
-  font-size: 9px;
-  font-weight: 400;
-  color: var(--dim);
-  font-family: 'JetBrains Mono', monospace;
-  letter-spacing: 0;
-}
-
-.holder-note {
-  margin: 10px 2px 0;
-  font-size: 11px;
-  line-height: 1.7;
-  color: var(--dim);
-  font-family: 'Noto Sans SC', sans-serif;
-}
-
-.sh-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 11px;
-}
-
-.sh-table th {
-  text-align: left;
-  padding: 6px 8px;
-  color: var(--dim);
-  font-weight: 500;
-  border-bottom: 1px solid var(--border);
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.sh-table th.sortable { cursor: pointer; user-select: none; transition: color 0.15s; }
-.sh-table th.sortable:hover { color: var(--accent); }
-.sh-table th.sortable .sort-icon { display: inline-block; margin-left: 3px; opacity: 0.3; font-size: 8px; }
-.sh-table th.sort-asc .sort-icon { opacity: 1; color: var(--green); }
-.sh-table th.sort-asc .sort-icon::after { content: '\25B2'; }
-.sh-table th.sort-desc .sort-icon { opacity: 1; color: var(--red); }
-.sh-table th.sort-desc .sort-icon::after { content: '\25BC'; }
-.sh-table th.sort-none .sort-icon::after { content: '\25C5\25C7'; }
-
-.sh-table td {
-  padding: 7px 8px;
-  border-bottom: 1px solid var(--border);
-  font-family: 'JetBrains Mono', monospace;
-  font-variant-numeric: tabular-nums;
-}
-
-.sh-table .name-cell {
-  font-family: 'Noto Sans SC', sans-serif;
-  font-weight: 600;
-}
-
 /* ═══ 户数存量分布 ═══ */
 .dist-box {
   background: var(--card);
@@ -1025,7 +930,7 @@ td.code-cell { color: var(--dim); font-size: 10px; }
 }
 
 /* ═══ Loading Skeleton ═══ */
-.kpi-card, .chart-box, .table-box, .sh-card, .footer-disclaimer {
+.kpi-card, .chart-box, .table-box, .footer-disclaimer {
   box-shadow: 0 1px 4px rgba(16,27,46,0.07);
 }
 
@@ -1048,7 +953,6 @@ td.code-cell { color: var(--dim); font-size: 10px; }
 @media (max-width: 768px) {
   .kpi-grid { grid-template-columns: 1fr 1fr; }
   .content { grid-template-columns: 1fr; }
-  .shareholder-grid { grid-template-columns: 1fr; }
   .header-right { flex-wrap: wrap; gap: 8px; }
   .footer-meta { flex-direction: column; gap: 4px; align-items: center; }
 }
@@ -1213,57 +1117,10 @@ td.code-cell { color: var(--dim); font-size: 10px; }
 
   <div class="section-divider"></div>
 
-  <!-- ═══════ Quarterly Section ═══════ -->
+  <!-- ═══════ 股东户数 · 筹码动向（点表头排序） ═══════ -->
   <div class="section-header">
-    <h2>股东户数</h2>
-    <span class="freq-tag quarterly"><span class="freq-tag-dot"></span>季度披露 · 上市公司定期公告</span>
-  </div>
-
-  <div class="shareholder-grid">
-    <div class="sh-card">
-      <h4><span class="sh-icon up"></span>户数增幅 TOP</h4>
-      <table class="sh-table">
-        <thead><tr><th style="text-align:left">股票</th><th>户数</th><th>增幅</th><th>区间</th></tr></thead>
-        <tbody id="holderIncreaseBody">
-          <tr><td colspan="4" style="text-align:center;color:var(--dim)">加载中...</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <div class="sh-card">
-      <h4><span class="sh-icon down"></span>户数减少 TOP</h4>
-      <table class="sh-table">
-        <thead><tr><th style="text-align:left">股票</th><th>户数</th><th>减幅</th><th>区间</th></tr></thead>
-        <tbody id="holderDecreaseBody">
-          <tr><td colspan="4" style="text-align:center;color:var(--dim)">加载中...</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <div class="sh-card">
-      <h4><span class="sh-icon retail"></span>散户扎堆 TOP <span class="sh-hint">散户占流通比最高</span></h4>
-      <table class="sh-table">
-        <thead><tr><th style="text-align:left">股票</th><th>散户及其他</th><th>主力(机构)</th><th>股东户数</th></tr></thead>
-        <tbody id="holderRetailBody">
-          <tr><td colspan="4" style="text-align:center;color:var(--dim)">加载中...</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <div class="sh-card">
-      <h4><span class="sh-icon main"></span>主力控盘 TOP <span class="sh-hint">主力占流通比最高</span></h4>
-      <table class="sh-table">
-        <thead><tr><th style="text-align:left">股票</th><th>主力(机构)</th><th>大股东法人</th><th>散户及其他</th></tr></thead>
-        <tbody id="holderMainBody">
-          <tr><td colspan="4" style="text-align:center;color:var(--dim)">加载中...</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <p class="holder-note" id="holderPerCapitaNote"></p>
-
-  <!-- ═══════ 筹码动向（点表头排序） ═══════ -->
-  <div class="section-header">
-    <h2>筹码动向</h2>
-    <span class="freq-tag quarterly"><span class="freq-tag-dot"></span>点表头切换升 / 降序 · 覆盖全市场</span>
+    <h2>股东户数与筹码动向</h2>
+    <span class="freq-tag quarterly"><span class="freq-tag-dot"></span>季度披露 · 点表头切换升 / 降序 · 覆盖全市场</span>
   </div>
 
   <div class="table-box chip-box">
@@ -1391,8 +1248,6 @@ function render() {
   document.getElementById('legendMain').textContent = ts.main_pct;
 
   renderFlow();
-  renderShareholders();
-  renderHolderPerCapita();
   renderChipFlow();
   renderHolderDist();
 }
@@ -1599,66 +1454,11 @@ function renderTable(stocks, primaryField) {
   document.getElementById('tableBody').innerHTML = bodyHtml || '<tr><td colspan="' + ncols + '" style="text-align:center;color:var(--dim)">无匹配结果</td></tr>';
 }
 
-function renderShareholders() {
-  if (!allData?.shareholder_count) return;
-  const increase = allData.shareholder_count.filter(s => s.change_pct > 0).sort((a,b) => b.change_pct - a.change_pct).slice(0, 20);
-  const decrease = allData.shareholder_count.filter(s => s.change_pct < 0).sort((a,b) => a.change_pct - b.change_pct).slice(0, 20);
-  let html = '';
-  for (const s of increase) {
-    html += '<tr><td class="name-cell">' + s.name + '</td><td style="text-align:right">' + (s.current/10000).toFixed(1) + '万</td><td style="color:var(--red);text-align:right">+' + s.change_pct.toFixed(1) + '%</td><td style="color:var(--dim)">' + s.period + '</td></tr>';
-  }
-  document.getElementById('holderIncreaseBody').innerHTML = html || '<tr><td colspan="4" style="text-align:center;color:var(--dim)">暂无数据</td></tr>';
-  html = '';
-  for (const s of decrease) {
-    html += '<tr><td class="name-cell">' + s.name + '</td><td style="text-align:right">' + (s.current/10000).toFixed(1) + '万</td><td style="color:var(--green);text-align:right">' + s.change_pct.toFixed(1) + '%</td><td style="color:var(--dim)">' + s.period + '</td></tr>';
-  }
-  document.getElementById('holderDecreaseBody').innerHTML = html || '<tr><td colspan="4" style="text-align:center;color:var(--dim)">暂无数据</td></tr>';
-}
-
 function fmtHolders(n) {
   n = n || 0;
   if (n >= 1e8) return (n / 1e8).toFixed(2) + ' 亿';
   if (n >= 1e4) return (n / 1e4).toFixed(1) + ' 万';
   return String(n);
-}
-
-// 持股结构榜：主力（投资机构）/ 大股东法人 / 散户及其他 —— 占流通股比，与股价无关
-function renderHolderPerCapita() {
-  const d = allData && allData.holder_distribution;
-  const ow = d && d.ownership;
-  const pct = (v, color) => '<td style="text-align:right;color:' + color + '">' + (v || 0).toFixed(2) + '%</td>';
-  // 两张卡侧重点不同：散户榜所有值都接近 100%，靠「股东户数」区分，所以把户数列出来
-  const groups = {
-    holderRetailBody: (ow && ow.retail_top) ? ow.retail_top.map(x =>
-      '<tr><td class="name-cell">' + x.name + '</td>'
-      + pct(x.retail_pct, 'var(--red)')
-      + pct(x.inst_pct, 'var(--blue)')
-      + '<td style="text-align:right;color:var(--dim)">' + fmtHolders(x.holders) + '</td></tr>') : null,
-    holderMainBody: (ow && ow.main_top) ? ow.main_top.map(x =>
-      '<tr><td class="name-cell">' + x.name + '</td>'
-      + pct(x.inst_pct, 'var(--blue)')
-      + pct(x.legal_pct, 'var(--dim)')
-      + pct(x.retail_pct, 'var(--red)') + '</tr>') : null,
-  };
-  for (const id of Object.keys(groups)) {
-    const el = document.getElementById(id);
-    if (!el) continue;
-    const rows = groups[id];
-    el.innerHTML = (rows && rows.length)
-      ? rows.join('')
-      : '<tr><td colspan="4" style="text-align:center;color:var(--dim)">暂无数据</td></tr>';
-  }
-  const note = document.getElementById('holderPerCapitaNote');
-  if (note) {
-    note.textContent = ow
-      ? '口径说明：数据来自东财「机构持股」（报告期 ' + ow.period + '），按占流通股比例拆成三段 —— '
-        + '主力 = 公募基金 + QFII + 社保 + 券商 + 保险 + 信托 等投资机构；大股东法人 = 产业资本 / 一般法人；散户及其他 = 其余未列入机构名单的账户。三段相加约等于 100%。'
-        + '可统计 ' + ow.sample.toLocaleString() + ' 只。'
-        + '这才是与股价无关的「占比」：主力占流通比越高说明筹码越集中在机构手里，散户及其他越高说明越散。'
-        + '注意三点：① 季度披露的持股快照，不是实时；② 若控股股东本身是保险 / 金融机构，会被计入「主力」而偏高（如中国人寿）；'
-        + '③ 大量小票的散户占比正好是 100%，散户榜已剔除数据自相矛盾的记录（有机构家数却占流通比为 0），并按股东户数做二次排序（户数 ≥ ' + ow.min_holders.toLocaleString() + '）。'
-      : '';
-  }
 }
 
 // 户数存量分布：全市场按股东户数分档，含各档资金构成
