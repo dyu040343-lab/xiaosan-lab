@@ -8,12 +8,32 @@
 
 import json
 import os
+import sys
 import time
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 OUTPUT_DIR = "data"
 CACHE_FILE = f"{OUTPUT_DIR}/radar_data_cache.json"
+
+# ── 交易时段闸门 ────────────────────────────────────────────────
+# 北京时间（固定 UTC+8，不依赖服务器时区）：
+#   上午 9:15–11:35（含集合竞价 9:15 与午间收尾）
+#   下午 12:55–15:35（含 13:00 开盘与 15:20 收盘后定格当天最终数据）
+# 非交易时段直接跳过、不写文件（加 --force 可强制抓取）
+BJ_TZ = timezone(timedelta(hours=8))
+TRADING_WINDOWS = ((9 * 60 + 15, 11 * 60 + 35), (12 * 60 + 55, 15 * 60 + 35))
+
+
+def in_trading_window(now=None):
+    """是否处于 A 股交易时段（周一至周五 + 时间窗）。
+    法定节假日无法在本地判断，会照跑一次（数据不变，无害）"""
+    now = now or datetime.now(BJ_TZ)
+    if now.weekday() >= 5:            # 周六 / 周日
+        return False
+    minutes = now.hour * 60 + now.minute
+    return any(start <= minutes <= end for start, end in TRADING_WINDOWS)
+
 
 EASTMONEY_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
@@ -877,6 +897,15 @@ def calc_overview(stocks):
 
 
 def main():
+    force = "--force" in sys.argv
+    if not force and not in_trading_window():
+        print("=" * 50)
+        print(f"😴 非交易时段（北京时间 {datetime.now(BJ_TZ).strftime('%Y-%m-%d %H:%M')}），跳过本次抓取")
+        print("   交易时段：周一至周五 9:15–11:35 / 12:55–15:35")
+        print("   需要强制抓取请加 --force，例如：python3 scripts/fetch_data.py --force")
+        print("=" * 50)
+        return
+
     retail_flow, data_status = fetch_retail_money_flow()
     overview = calc_overview(retail_flow)
 
