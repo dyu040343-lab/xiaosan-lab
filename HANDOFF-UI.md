@@ -136,6 +136,11 @@ circ_ratio                         流通A股/总股本 %
 13. **休市判断必须走日历**：不要把节假日硬编码进前端（周末判定除外），也不要因为日历加载失败就把刷新关掉 —— 缺日历时的正确行为是**退回「只看工作日」**（宁可多刷一次）。`isMarketClosed()` / `isHoliday()` 的返回值语义别改。
 14. **榜单内的筛选会同时作用于图表和表格**（两者必须一致，别只筛表格）。筛选后为空时**不能只显示"暂无数据"**：`emptyStateHTML()` 必须继续告诉用户"这个词有没有这只票、它现在三档净额是多少、下一步点哪里"。`filter-chip`（筛选中 · 命中 N 只 + ✕）是让筛选状态常驻可见的，别删。
 15. **筹码表的说明文案必须保持一行速读**：详细口径收在 `口径说明` 折叠面板里（`chipHelpOpen` 记忆展开状态，别每次渲染都重置）。不要把这些文字再摊回页面上。
+16. **「搜索范围」与「榜单口径」是两件事，别混成一件**：
+    - 榜单表只**展示** TOP30，但榜单内筛选（`matchSearch`）扫的是**整张榜单**（如散户净流入 2960 只），所以第 329 名也搜得到 —— 这是刻意设计，别把筛选改成"只在显示的 30 行里找"。
+    - 当一只票**在市场上存在、但被本榜单的口径挡在门外**时（占比榜的成交额 ≥ `LIQUIDITY_MIN`=5 亿门槛 / 资金动向榜的单边方向），空态必须**说清是哪条规则挡的**，并给出对应动作：占比榜 →「仍然显示它（口径外）」(`forceShow`，行上打 `.off-scope` 标、标题注明"含口径外 N 只")；方向不符 →「切到「净流入TOP」看它」(`boardForStock` 算目标 subtab)。
+    - 流动性门槛只认 `LIQUIDITY_MIN` 这一个常量（`getBaseList` 与空态解释都用它），别新增第二处硬编码 5。
+    - 切换 tab / subtab / 改搜索词都要清空 `forceCodes`（口径外标记只对当次搜索有效）。
 
 ---
 
@@ -165,8 +170,8 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 |---|---|
 | `fetchData()` / `render()` | 拉数据 → 渲染全部区块；数据刷新后会 `_universe = null` 重建索引 |
 | `getBaseList()` / `applyDefaultSort()` / `renderView()` | 榜单：filter / 设排序 / 渲染 |
-| `matchSearch()` / `filterTable()` / `clearListFilter()` / `updateFilterChip()` | 榜单内筛选（同时作用于图表与表格）+ 常驻筛选状态 chip |
-| `emptyStateHTML()` / `quickLookup()` | 空态解释（这个词有没有、这只票现在什么方向）+ 一键跳「个股速查」 |
+| `matchSearch()` / `filterTable()` / `clearListFilter()` / `updateFilterChip()` | 榜单内筛选（扫整张榜单，同时作用于图表与表格）+ 常驻筛选状态 chip |
+| `emptyStateHTML()` / `quickLookup()` / `boardForStock()` / `forceShow()` / `ensureRatio()` / `LIQUIDITY_MIN` | 空态诊断（哪条规则挡的）+ 一键动作；「口径外」显示通道 |
 | `toggleChipHelp()` | 筹码表「口径说明」折叠面板 |
 | `renderChart(stocks, field)` | 手写 SVG 条形图 |
 | `renderTable(stocks, field)` | 榜单表格（8 列，含 ☆） |

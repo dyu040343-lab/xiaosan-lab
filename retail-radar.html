@@ -674,6 +674,20 @@ td.col-highlight { background: rgba(245,185,66,0.06); font-weight: 700; }
 .empty-btn:hover { border-color: var(--accent-dim); color: var(--accent); }
 .empty-btn.primary { background: rgba(180,83,9,0.08); border-color: var(--accent-dim); color: var(--accent); }
 
+/* 榜单口径外的一行（用户点名要看的） */
+.off-scope {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--dim);
+  font-size: 9.5px;
+  font-weight: 400;
+  font-family: 'JetBrains Mono', monospace;
+  vertical-align: 1px;
+}
+
 /* ═══ Content Grid ═══ */
 .content {
   display: grid;
@@ -1483,9 +1497,9 @@ function getBaseList() {
       });
       break;
   }
-  // 占比 tab：流动性过滤（剔除成交额<5亿的票）
+  // 占比 tab：流动性过滤（剔除成交额 < 门槛的票，阈值见 LIQUIDITY_MIN）
   if (currentTab === 'dynamic') {
-    stocks = stocks.filter(s => (s.total_amount || 0) >= 5);
+    stocks = stocks.filter(s => (s.total_amount || 0) >= LIQUIDITY_MIN);
   }
   return stocks;
 }
@@ -1528,6 +1542,13 @@ function renderFlow() {
 function renderView() {
   const pf = PRIMARY_FIELD();
   let list = viewList.filter(matchSearch);
+  // 用户明确点过「仍然显示它」：用全市场数据补进来（只影响显示，榜单口径不变）
+  let offScope = false;
+  if (searchText && !list.length && forceCodes.length) {
+    list = marketMatches().filter(s => forceCodes.indexOf(s.code) >= 0);
+    list.forEach(ensureRatio);
+    offScope = list.length > 0;
+  }
   const col = sortCol;
   if (col) {
     const asc = sortAsc;
@@ -1542,9 +1563,9 @@ function renderView() {
     });
   }
   const top = list.slice(0, 30);
-  document.getElementById('chartTitle').textContent = chartTitleFor();
+  document.getElementById('chartTitle').textContent = chartTitleFor() + (offScope ? '（含口径外 ' + top.length + ' 只）' : '');
   renderChart(top, pf);
-  renderTable(top, pf);
+  renderTable(top, pf, offScope);
 }
 
 function renderChart(stocks, primaryField) {
@@ -1590,7 +1611,7 @@ function renderChart(stocks, primaryField) {
   document.getElementById('chartArea').innerHTML = html;
 }
 
-function renderTable(stocks, primaryField) {
+function renderTable(stocks, primaryField, offScope) {
   const isDynamic = currentTab === 'dynamic';
   // 价格 / 涨跌两列紧跟「名称」之后，方便一眼看到实时行情
   const cols = isDynamic ? [
@@ -1633,7 +1654,8 @@ function renderTable(stocks, primaryField) {
     const isHL = (key) => key === hlKey ? ' class="col-highlight"' : '';
     bodyHtml += '<tr>' +
       '<td class="code-cell">' + s.code + '</td>' +
-      '<td class="name-cell">' + starBtn(s.code) + s.name + '</td>' +
+      '<td class="name-cell">' + starBtn(s.code) + s.name
+        + (offScope ? '<span class="off-scope" title="不在本榜单口径内，是你要求单独显示的">口径外</span>' : '') + '</td>' +
       '<td class="' + cls + '">' + (s.price > 0 ? s.price.toFixed(2) : '--') + '</td>' +
       '<td class="' + cls + '">' + (s.change_pct ? (s.change_pct > 0 ? '+' : '') + s.change_pct.toFixed(2) + '%' : '--') + '</td>' +
       '<td' + isHL('retail_net') + ' style="color:' + (r >= 0 ? 'var(--red)' : 'var(--green)') + ';font-weight:600">' + (r >= 0 ? '+' : '') + r.toFixed(2) + '</td>' +
@@ -1654,13 +1676,23 @@ function renderTable(stocks, primaryField) {
    筛选后为空时，不能只说"暂无数据" —— 要告诉用户：
    这个词存不存在、这只票现在在哪个方向、以及下一句该点哪里。
    ─────────────────────────────────────────────────────────── */
+/* 榜单口径外、但用户明确要求"我就要看这只"的代码
+   （只影响显示，不改榜单规则：占比榜仍然是成交额 ≥5 亿的排名）*/
+let forceCodes = [];
+
 function matchSearch(s) {
   if (!searchText) return true;
   const q = searchText.toLowerCase();
   return (s.code || '').toLowerCase().includes(q) || (s.name || '').toLowerCase().includes(q);
 }
+function marketMatches() {
+  const q = searchText.toLowerCase();
+  return (allData?.retail_flow || []).filter(s =>
+    (s.code || '').toLowerCase().includes(q) || (s.name || '').toLowerCase().includes(q));
+}
 function clearListFilter() {
   searchText = '';
+  forceCodes = [];
   const inp = document.getElementById('searchInput');
   if (inp) inp.value = '';
   updateFilterChip();
@@ -1671,8 +1703,9 @@ function updateFilterChip() {
   if (!el) return;
   if (!searchText) { el.style.display = 'none'; el.innerHTML = ''; return; }
   const n = viewList.filter(matchSearch).length;
+  const out = (n === 0 && forceCodes.length) ? '（口径外 ' + forceCodes.length + ' 只）' : '';
   el.style.display = '';
-  el.innerHTML = '筛选中：' + searchText + ' · 命中 ' + n + ' 只'
+  el.innerHTML = '筛选中：' + searchText + ' · 命中 ' + n + ' 只' + out
     + '<span class="chip-x" title="清除筛选" onclick="clearListFilter()">✕</span>';
 }
 function quickLookup(code) {
@@ -1687,29 +1720,70 @@ function yi(v, color) {
   const x = v || 0;
   return '<span style="color:' + color + '">' + (x > 0 ? '+' : '') + x.toFixed(2) + ' 亿</span>';
 }
-function emptyStateHTML() {
-  if (!searchText) {
-    return '<div class="empty-tip">当前榜单暂无数据</div>';
+// 这只票在本 tab 的「哪个 subtab」里？用来给「切过去」按钮
+function boardForStock(s) {
+  if (currentTab !== 'flow') return null;
+  const subs = FLOW_SUBTABS[currentFlow];
+  const v = s[PRIMARY_FIELD()] || 0;
+  return { key: (v >= 0 ? subs[0] : subs[1]).key, label: (v >= 0 ? subs[0] : subs[1]).label };
+}
+// 占比 tab 的流动性门槛（与 getBaseList 里保持一致）
+const LIQUIDITY_MIN = 5;
+function forceShow(code) {
+  if (forceCodes.indexOf(code) < 0) forceCodes.push(code);
+  renderView();
+  updateFilterChip();
+}
+function ensureRatio(s) {
+  if (currentSub === 'main_ratio_top' || currentSub === 'main_ratio_bottom') {
+    const amt = s.total_amount || 0;
+    s._ratio = amt > 0.01 ? (s.main_net || 0) / amt * 100 : 0;
+  } else {
+    s._ratio = s.dynamic_ratio || 0;
   }
-  const q = searchText, lq = q.toLowerCase();
-  const hits = (allData?.retail_flow || []).filter(s =>
-    (s.code || '').toLowerCase().includes(lq) || (s.name || '').toLowerCase().includes(lq));
+}
+function emptyStateHTML() {
+  if (!searchText) return '<div class="empty-tip">当前榜单暂无数据</div>';
+  const q = searchText;
+  const hits = marketMatches();
   if (!hits.length) {
     return '<div class="empty-tip">全市场没有匹配「' + q + '」的股票<br>'
       + '<button class="empty-btn" onclick="clearListFilter()">清除筛选</button></div>';
   }
   const s = hits.slice().sort((a, b) => (b.total_amount || 0) - (a.total_amount || 0))[0];
-  const name = s.name + '（' + s.code + '）';
-  const more = hits.length > 1 ? '等 ' + hits.length + ' 只' : '';
+  const name = '<b>' + s.name + '（' + s.code + '）</b>' + (hits.length > 1 ? '等 ' + hits.length + ' 只' : '');
+  const lookupBtn = '<button class="empty-btn primary" onclick="quickLookup(\'' + s.code + '\')">看它全部指标</button>';
+  const clearBtn = '<button class="empty-btn" onclick="clearListFilter()">清除筛选</button>';
+
+  // ① 占比榜：被「成交额 ≥5 亿」门槛筛掉（这是唯一的排除原因，榜单本身不分方向）
+  if (currentTab === 'dynamic' && (s.total_amount || 0) < LIQUIDITY_MIN) {
+    return '<div class="empty-tip">'
+      + '当前榜单里没有 ' + name + '<br>'
+      + '占比榜只收录成交额 ≥ ' + LIQUIDITY_MIN + ' 亿的股票，它今天只有 <b>' + (s.total_amount || 0).toFixed(2)
+      + ' 亿</b>（占比 ' + (s.dynamic_ratio || 0).toFixed(1) + '%）—— 成交额太小，占比会被放大成噪声<br>'
+      + '<button class="empty-btn" onclick="forceShow(\'' + s.code + '\')">仍然显示它（口径外）</button>'
+      + clearBtn + lookupBtn
+      + '</div>';
+  }
+  // ② 资金动向：方向不对（这张榜只看单边）
+  const board = boardForStock(s);
+  if (board) {
+    return '<div class="empty-tip">'
+      + '当前榜单里没有 ' + name + '<br>'
+      + '它现在是 散户 ' + yi(s.retail_net, (s.retail_net || 0) > 0 ? 'var(--red)' : 'var(--green)')
+      + ' · 中单 ' + yi(s.medium_net, (s.medium_net || 0) > 0 ? 'var(--red)' : 'var(--green)')
+      + ' · 主力 ' + yi(s.main_net, (s.main_net || 0) > 0 ? 'var(--blue)' : 'var(--green)')
+      + '<br>本榜单只看单边方向，它在「' + board.label + '」里<br>'
+      + '<button class="empty-btn" onclick="switchSub(\'' + board.key + '\')">切到「' + board.label + '」看它</button>'
+      + clearBtn + lookupBtn
+      + '</div>';
+  }
+  // ③ 兜底
   return '<div class="empty-tip">'
-    + '当前榜单里没有 <b>' + name + '</b>' + more + '<br>'
-    + '它现在是：散户 ' + yi(s.retail_net, (s.retail_net || 0) > 0 ? 'var(--red)' : 'var(--green)')
-    + ' · 中单 ' + yi(s.medium_net, (s.medium_net || 0) > 0 ? 'var(--red)' : 'var(--green)')
+    + '当前榜单里没有 ' + name + '<br>'
+    + '它现在是 散户 ' + yi(s.retail_net, (s.retail_net || 0) > 0 ? 'var(--red)' : 'var(--green)')
     + ' · 主力 ' + yi(s.main_net, (s.main_net || 0) > 0 ? 'var(--blue)' : 'var(--green)')
-    + '<br>换个方向 / 榜单看看，或者 ——<br>'
-    + '<button class="empty-btn" onclick="clearListFilter()">清除筛选</button>'
-    + '<button class="empty-btn primary" onclick="quickLookup(\'' + s.code + '\')">在「个股速查」里看它全部指标</button>'
-    + '</div>';
+    + '<br>' + clearBtn + lookupBtn + '</div>';
 }
 
 // 筹码动向：一行一只股票，把「户数变化 × 主力持股 × 主力环比」合成一张可排序表
@@ -2222,7 +2296,9 @@ function toast(msg) {
 }
 
 function filterTable() {
-  searchText = document.getElementById('searchInput').value.trim();
+  const v = document.getElementById('searchInput').value.trim();
+  if (v !== searchText) forceCodes = [];   // 换了搜索词就重置"口径外"标记
+  searchText = v;
   updateFilterChip();
   if (!allData?.retail_flow) return;
   renderView();
@@ -2279,6 +2355,7 @@ function renderSubtabs() {
 function switchTab(tab) {
   currentTab = tab;
   userSorted = false;
+  forceCodes = [];      // 换榜单后「口径外」标记失效，重新判定
   document.querySelectorAll('.tab-bar .tab').forEach(t => t.classList.remove('active'));
   event.target.classList.add('active');
   if (tab === 'flow') {
@@ -2294,6 +2371,7 @@ function switchFlowTab(flow) {
   // 一级 subtab 切换：散户资金 / 中单资金 / 主力资金
   currentFlow = flow;
   userSorted = false;
+  forceCodes = [];
   currentSub = FLOW_SUBTABS[flow][0].key;
   renderSubtabs();
   renderFlow();
@@ -2303,6 +2381,7 @@ function switchSub(sub) {
   // 二级 subtab 切换：净流入/净流出 或 占比TOP/BOTTOM
   currentSub = sub;
   userSorted = false;
+  forceCodes = [];
   renderSubtabs();
   renderFlow();
 }
