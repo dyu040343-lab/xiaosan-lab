@@ -126,7 +126,7 @@ circ_ratio                         流通A股/总股本 %
 5. **`PRIMARY_FIELD()` 在占比 tab 恒返回 `retail_net`**：占比列的橙色高亮只属于「资金动向」tab，别"顺手统一"。
 6. **BOTTOM 榜单必须是负值**（对齐净流出），不要搞成"最小正值"。
 7. **筹码表口径**：`锁定盘 = 100 − 自由流通`（A 股视角）。`holder_chg === null` 表示该股股东户数是按月披露、与季频窗口不可比 → 必须显示 `--` **并沉底，不能当 0**。
-8. **性能红线**：筹码表**只渲染排序后的前 300 行**（全量 5493 行会让页面卡死）；榜单本身也有限条。别改成全量渲染。
+8. **性能红线**：筹码表**只渲染排序后的前 `CHIP_RENDER_LIMIT`（现 30）行**（全量 5493 行会让页面卡死）；榜单本身也是有限条。别改成全量渲染，也别把这个数字调大 —— 想看某只具体股票，入口是顶部「个股速查」。
 9. **表头 sticky 的两个坑**（现在的实现是对的，别"优化"坏）：
    - `.table-box` 的 `padding-top` 必须是 `0`（`padding: 0 12px 12px`），否则冻结表头上方会露出滚动内容；
    - 排序激活列表头背景必须是**不透明**色（`#f9f1e9`），半透明会让数据透上来。
@@ -170,7 +170,7 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 | `toggleChipHelp()` | 筹码表「口径说明」折叠面板 |
 | `renderChart(stocks, field)` | 手写 SVG 条形图 |
 | `renderTable(stocks, field)` | 榜单表格（8 列，含 ☆） |
-| `renderChipFlow()` / `chipSortTable(col)` | 筹码表（9 列，默认按户数变化升序，只渲染前 300 行） |
+| `renderChipFlow()` / `chipSortTable(col)` / `toggleChipHelp()` | 筹码表（9 列，默认按户数变化升序，只渲染前 `CHIP_RENDER_LIMIT`=30 行） |
 | `renderSubtabs()` / `switchTab()` / `switchFlowTab()` / `switchSub()` / `sortTable()` | tab 与排序交互 |
 | `universe()` | 把 `retail_flow` × `chip_flow.rows` 按 code 合并成全指标 Map（速查/自选的数据源） |
 | `onQuickInput()` / `drawStockPanel()` / `spCell()` / `spSort()` | 个股速查面板 |
@@ -239,7 +239,7 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 
 硬性要求（也写在 HANDOFF-UI.md 第 1、5 节）：
 - 不要引入任何框架或构建工具，保持单文件、原生 JS/CSS。
-- 不要改业务口径、过滤条件、排序逻辑（尤其是占比 tab 的成交额 ≥5 亿过滤、筹码表户数变化空值显示 -- 并沉底、只渲染前 300 行）。
+- 不要改业务口径、过滤条件、排序逻辑（尤其是占比 tab 的成交额 ≥5 亿过滤、筹码表户数变化空值显示 -- 并沉底、只渲染前 30 行）。
 - 不要动 data/ 目录。
 - 改完自己跑一遍第 9 节的验收清单，并给我一份改动说明。
 ```

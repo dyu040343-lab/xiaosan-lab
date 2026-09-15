@@ -1714,6 +1714,9 @@ function emptyStateHTML() {
 
 // 筹码动向：一行一只股票，把「户数变化 × 主力持股 × 主力环比」合成一张可排序表
 let chipSortCol = 'holder_chg', chipSortAsc = true;
+// 只渲染排序后的前 N 行：全市场 5493 行全渲染会卡，而榜单只看头尾两段；
+// 想看某只具体股票，用顶部的「个股速查」（输入代码/名称，一次看全它的所有指标）。
+const CHIP_RENDER_LIMIT = 30;
 
 // 三档占比统一以「自由流通」为分母 —— 回答「真正会动的筹码里，散户和主力谁更强」。
 // 为什么不再提供口径切换（2026-09-15 用户反馈「三个选项看着懵」）：
@@ -1787,7 +1790,7 @@ function renderChipFlow() {
     return asc ? Number(va) - Number(vb) : Number(vb) - Number(va);
   });
 
-  const shown = sorted.slice(0, 300);
+  const shown = sorted.slice(0, CHIP_RENDER_LIMIT);
   const aCol = (v, color) => v === null || v === undefined
     ? '<td style="color:var(--dim)">--</td>'
     : '<td style="color:' + color(v) + '">' + (v > 0 ? '+' : '') + v.toFixed(1) + '%</td>';
@@ -1821,7 +1824,8 @@ function renderChipFlow() {
     const sortLabel = (CHIP_COLS.find(c => c.key === chipSortCol) || {}).label || chipSortCol;
     note.innerHTML =
       '<span>' + rows.length.toLocaleString() + ' 只 · 显示前 ' + shown.length + ' 行 · 按「'
-      + sortLabel + '」' + (chipSortAsc ? '升序' : '降序') + ' · 点表头换排序</span>'
+      + sortLabel + '」' + (chipSortAsc ? '升序' : '降序') + ' · 点表头换排序'
+      + ' · 查个股用顶部「个股速查」</span>'
       + '<button class="note-toggle" onclick="toggleChipHelp()">口径说明</button>'
       + '<div class="chip-help" id="chipHelp"' + (chipHelpOpen ? '' : ' style="display:none"') + '>'
       + '<div><b>结构</b>锁定盘 = 100% − 自由流通，越高越由锁仓方定价（中国石油 94% / 建设银行 8%）。</div>'
