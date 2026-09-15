@@ -2174,15 +2174,40 @@ function sortTable(col) {
 }
 
 /* ── 刷新节奏 ──────────────────────────────────────────────
-   交易时段（北京 9:15–11:35 / 12:55–15:35，周一至周五）：60s 轮询
-   非交易时段：**停止轮询数据**，只留一个 5 分钟"看门狗"等开盘自动接上
+   交易日历来自 data/trading_calendar.json（周末 + 法定节假日）
+   交易时段（北京时间 9:15–11:35 / 12:55–15:35，且当天开市）：60s 轮询
+   休市日 / 非交易时段：**停止轮询数据**，只留一个 5 分钟"看门狗"等开盘自动接上
    （打开页面时仍会立即拉一次，所以收盘后打开看到的还是当天最终数据）
+   日历加载失败或未覆盖当年 → 退回「只看工作日」，宁可多刷也不停摆
    ───────────────────────────────────────────────────────── */
 const TRADING_WINDOWS = [[9 * 60 + 15, 11 * 60 + 35], [12 * 60 + 55, 15 * 60 + 35]];
+const CALENDAR = { closed: new Set(), years: [] };
+
+async function loadCalendar() {
+  try {
+    const r = await fetch('data/trading_calendar.json?t=' + Date.now());
+    const j = await r.json();
+    CALENDAR.closed = new Set(j.closed_days || []);
+    CALENDAR.years = (j.years_covered || []).map(Number);
+  } catch (e) { CALENDAR.closed = new Set(); CALENDAR.years = []; }
+}
+function ymd(d) {
+  return d.getFullYear() + '-'
+    + String(d.getMonth() + 1).padStart(2, '0') + '-'
+    + String(d.getDate()).padStart(2, '0');
+}
+function isWeekend(d) { return d.getDay() === 0 || d.getDay() === 6; }
+function isHoliday(d) {          // 法定节假日；日历未覆盖该年 → 不判断（保守当开市）
+  if (CALENDAR.years.indexOf(d.getFullYear()) < 0) return false;
+  return CALENDAR.closed.has(ymd(d));
+}
+function isMarketClosed(d) {     // 当天是否休市
+  d = d || new Date();
+  return isWeekend(d) || isHoliday(d);
+}
 function isTradingNow(d) {
   d = d || new Date();
-  const day = d.getDay();
-  if (day === 0 || day === 6) return false;
+  if (isMarketClosed(d)) return false;
   const m = d.getHours() * 60 + d.getMinutes();
   return TRADING_WINDOWS.some(w => m >= w[0] && m <= w[1]);
 }
@@ -2194,8 +2219,10 @@ function updateAutoLabel() {
   const el = document.querySelector('.toggle span');
   if (!el) return;
   if (!autoEnabled) { el.textContent = 'AUTO 已关闭'; return; }
-  const ms = getRefreshInterval();
-  el.textContent = ms ? 'AUTO ' + (ms / 1000) + 's' : '已收盘 · 暂停';
+  const now = new Date();
+  if (isWeekend(now)) { el.textContent = '休市 · 周末'; return; }
+  if (isHoliday(now)) { el.textContent = '休市 · 节假日'; return; }
+  el.textContent = getRefreshInterval() ? 'AUTO ' + (getRefreshInterval() / 1000) + 's' : '已收盘 · 暂停';
 }
 
 function scheduleAutoRefresh() {
@@ -2229,6 +2256,9 @@ fetchData();
 updateAutoLabel();
 document.getElementById('autoToggle').classList.add('on');
 scheduleAutoRefresh();
+
+// 交易日历（周末 + 法定节假日）加载完成后，重算刷新节奏与 AUTO 标签
+loadCalendar().then(() => { updateAutoLabel(); scheduleAutoRefresh(); });
 
 // 快捷键：按 / 或 Ctrl(⌘)+K 直接跳到个股速查
 document.addEventListener('keydown', e => {

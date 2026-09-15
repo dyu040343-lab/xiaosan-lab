@@ -20,16 +20,47 @@ CACHE_FILE = f"{OUTPUT_DIR}/radar_data_cache.json"
 # 北京时间（固定 UTC+8，不依赖服务器时区）：
 #   上午 9:15–11:35（含集合竞价 9:15 与午间收尾）
 #   下午 12:55–15:35（含 13:00 开盘与 15:20 收盘后定格当天最终数据）
-# 非交易时段直接跳过、不写文件（加 --force 可强制抓取）
+# 开市日由 data/trading_calendar.json 决定（周末 + 法定节假日），
+# 非开市日 / 非时段直接跳过、不写文件（加 --force 可强制抓取）。
+# 日历用 scripts/update_calendar.py 生成，每年 12 月交易所公布次年安排后跑一次。
 BJ_TZ = timezone(timedelta(hours=8))
 TRADING_WINDOWS = ((9 * 60 + 15, 11 * 60 + 35), (12 * 60 + 55, 15 * 60 + 35))
+CALENDAR_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "trading_calendar.json")
+
+_CAL = None
+
+
+def load_trading_calendar():
+    """读取交易日历，返回 {'closed': set, 'years': set}；失败返回 None"""
+    try:
+        with open(CALENDAR_FILE, encoding="utf-8") as f:
+            cal = json.load(f)
+        return {"closed": set(cal.get("closed_days") or []),
+                "years": set(cal.get("years_covered") or [])}
+    except Exception as e:
+        print(f"  ⚠️ 交易日历读取失败（{type(e).__name__}）：{CALENDAR_FILE}")
+        print("     ↳ 退回「只看工作日」，请跑 python3 scripts/update_calendar.py")
+        return None
+
+
+def is_trading_day(d=None, cal=None):
+    """今天是否开市：周末一律休市（含调休补班的周末）+ 日历中的法定节假日。
+    日历缺失或未覆盖该年份时**保守返回 True**（宁可真跑一次，数据不变也无害）"""
+    d = d or datetime.now(BJ_TZ).date()
+    if d.weekday() >= 5:                      # 周六 / 周日
+        return False
+    cal = _CAL if cal is None else cal
+    if cal and d.year in cal["years"]:
+        return d.isoformat() not in cal["closed"]
+    return True
 
 
 def in_trading_window(now=None):
-    """是否处于 A 股交易时段（周一至周五 + 时间窗）。
-    法定节假日无法在本地判断，会照跑一次（数据不变，无害）"""
+    """是否处于 A 股交易时段（开市日 + 时间窗）"""
     now = now or datetime.now(BJ_TZ)
-    if now.weekday() >= 5:            # 周六 / 周日
+    if not is_trading_day(now.date()):
         return False
     minutes = now.hour * 60 + now.minute
     return any(start <= minutes <= end for start, end in TRADING_WINDOWS)
@@ -897,11 +928,28 @@ def calc_overview(stocks):
 
 
 def main():
+    global _CAL
     force = "--force" in sys.argv
+    _CAL = load_trading_calendar()
+    if _CAL:
+        if datetime.now(BJ_TZ).year in _CAL["years"]:
+            print(f"  📅 交易日历：覆盖 {sorted(_CAL['years'])}，"
+                  f"全年休市工作日 {len(_CAL['closed'])} 天")
+        else:
+            print(f"  ⚠️ 交易日历未覆盖 {datetime.now(BJ_TZ).year} 年"
+                  f"（当前 {sorted(_CAL['years'])}）→ 已退回「只看工作日」")
+            print("     ↳ 请跑：python3 scripts/update_calendar.py")
+
     if not force and not in_trading_window():
+        now = datetime.now(BJ_TZ)
         print("=" * 50)
-        print(f"😴 非交易时段（北京时间 {datetime.now(BJ_TZ).strftime('%Y-%m-%d %H:%M')}），跳过本次抓取")
-        print("   交易时段：周一至周五 9:15–11:35 / 12:55–15:35")
+        if not is_trading_day(now.date()):
+            why = "周末" if now.weekday() >= 5 else "法定节假日休市"
+            print(f"😴 今天不是交易日（{why}），跳过本次抓取")
+        else:
+            print(f"😴 非交易时段（北京时间 {now.strftime('%Y-%m-%d %H:%M')}），跳过本次抓取")
+        print(f"   当前：{now.strftime('%Y-%m-%d %H:%M')}（北京时间）")
+        print("   抓取时段：交易日 9:15–11:35 / 12:55–15:35")
         print("   需要强制抓取请加 --force，例如：python3 scripts/fetch_data.py --force")
         print("=" * 50)
         return

@@ -38,7 +38,9 @@ python3 -m http.server 8080
 |---|---|---|
 | `retail-radar.html` | **唯一前端文件**（约 2250 行：CSS 66–1060 行，HTML 1100–1300 行，JS 1300–2254 行） | ✅ 改这里 |
 | `data/radar_data.json` | 服务端生成的数据快照 | ❌ 只读，别提交改动 |
+| `data/trading_calendar.json` | **交易日历**（周末 + 法定节假日休市日），前端也 fetch 它来决定刷新节奏 | ⚠️ 每年更新，见 4.4 |
 | `scripts/fetch_data.py` | 服务端抓数脚本（东财 push2 + datacenter） | ⚠️ 与前端契约相关，改字段要同步改前端并升版本号 |
+| `scripts/update_calendar.py` | 生成 / 校验 `data/trading_calendar.json` | 每年 12 月跑一次即可 |
 | `index.html` | 跳转到 `retail-radar.html` | 一般不用动 |
 | `about/terms/privacy/disclaimer.html` | 合规静态页 | 可改样式，但**文案别删**（合规要求） |
 | `_shared/`、`assets/` | **历史遗留，已无人引用**（echarts、旧 app.js/charts.js） | 忽略，别浪费时间 |
@@ -95,6 +97,24 @@ circ_ratio                         流通A股/总股本 %
 ```
 > 注意 `_ff` 后缀 = free float（自由流通），`_ts` = total shares（总股本）。
 
+### 4.4 `data/trading_calendar.json`（交易日历）
+```json
+{
+  "version": 1,
+  "updated": "2026-09-15",
+  "source": "深圳证券交易所交易日历接口 + 上证指数日K交叉校验",
+  "rule": "周六周日一律休市（含调休补班的周末）；closed_days 只列额外休市的【工作日】",
+  "years_covered": [2026],
+  "closed_days": ["2026-01-01", "2026-02-16", "...", "2026-09-25", "2026-10-01"]
+}
+```
+- 前端 `loadCalendar()` 读它（失败/字段缺失 → `CALENDAR.closed` 为空集，退回「只看工作日」，**不会停摆**）。
+- 判定顺序：`周末 或 closed_days 命中` → 休市；`years_covered` **没覆盖当前年份就不判定**（保守放行）。
+- 服务端 `scripts/fetch_data.py` 用同一份文件决定要不要抓数，口径与前端一致。
+- **年度维护**：交易所每年 12 月公布次年安排后跑
+  `python3 scripts/update_calendar.py`（默认刷新「今年 + 明年」；`--verify-only` 只校验不写盘）。
+  它会同时拉深交所日历和上证指数日 K 线做交叉校验，两边不一致会打印告警。
+
 ---
 
 ## 5. ⛔ 不许改的业务口径（UI 优化时最容易踩）
@@ -113,6 +133,7 @@ circ_ratio                         流通A股/总股本 %
 10. **点 ☆ 只改星标 DOM，不做整体重渲染**（否则表格滚动位置被重置，体验崩）。
 11. **自选每次改动前先 `loadWatchlist()` 读盘**（多标签页防覆盖，别优化掉）。
 12. **排序解耦**：`getBaseList()` 只做 filter，`applyDefaultSort()` 只设排序键与方向，`renderView()` 才真正渲染。别合并。
+13. **休市判断必须走日历**：不要把节假日硬编码进前端（周末判定除外），也不要因为日历加载失败就把刷新关掉 —— 缺日历时的正确行为是**退回「只看工作日」**（宁可多刷一次）。`isMarketClosed()` / `isHoliday()` 的返回值语义别改。
 
 ---
 
@@ -148,7 +169,8 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 | `universe()` | 把 `retail_flow` × `chip_flow.rows` 按 code 合并成全指标 Map（速查/自选的数据源） |
 | `onQuickInput()` / `drawStockPanel()` / `spCell()` / `spSort()` | 个股速查面板 |
 | `loadWatchlist() / saveWatchlist() / toggleWatch() / starBtn() / syncStars() / exportWatch() / importWatch() / clearWatch()` | 自选股（localStorage：`xiaosan_watchlist_v1`） |
-| `isTradingNow()` / `getRefreshInterval()` / `scheduleAutoRefresh()` / `toggleAuto()` | 刷新节奏：交易时段 60s，非交易时段**暂停**（只留 5 分钟看门狗等开盘） |
+| `isWeekend()` / `isHoliday()` / `isMarketClosed()` / `isTradingNow()` / `loadCalendar()` | 交易日历判定（周末 + 法定节假日），决定刷新节奏与 AUTO 标签 |
+| `getRefreshInterval()` / `scheduleAutoRefresh()` / `toggleAuto()` | 刷新节奏：交易时段 60s；休市/非交易时段**暂停**（只留 5 分钟看门狗等开盘） |
 
 ---
 
@@ -187,6 +209,8 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 3. 逐个切 tab / subtab / 点表头排序，无报错（F12 console 干净）。
 4. 缩小到 375px 宽看一遍，没有横向溢出把整页撑破。
 5. **业务回归**：占比 tab 的榜单仍只含成交额 ≥ 5 亿的票；筹码表"户数变化"为空的行仍在最底部显示 `--`；点 ☆ 不跳滚动位置。
+6. **日历回归**：把 `data/trading_calendar.json` 临时改名 → 页面仍能正常加载（退回只看工作日）；再放回来 → 休市日（如 2026-09-25）在控制台里 `isTradingNow(new Date(2026,8,25,10,0))` 应返回 `false`。
+7. **AUTO 标签**：交易时段 `AUTO 60s`、收盘后 `已收盘 · 暂停`、周末 `休市 · 周末`、节假日在工作日位置 `休市 · 节假日`。
 
 **交付要求：**
 - 只改 `retail-radar.html`（如必须动其他文件，先说明原因）。
