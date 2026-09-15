@@ -127,7 +127,7 @@ def fetch_from_eastmoney():
                         "invt": 2,
                         "fid": "f62",
                         "fs": "m:0 t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048",
-                        "fields": "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f100,f124,f38,f39",
+                        "fields": "f12,f14,f2,f3,f6,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f100,f124,f38,f39",
                     }
                     data = _fetch_page(session, base_url, params)
                     items = data["data"].get("diff", [])
@@ -204,7 +204,14 @@ def fetch_from_eastmoney():
         # 主力净额直接用东财官方 f62（=超大单+大单），与东财页面口径一致
         main_net = round(to_float(item.get("f62")) / yi, 4)
 
-        if small_pct != 0:
+        # 成交额：优先用东财直接给的 f6（元 → 亿元），反推只作兜底。
+        # 为什么改（2026-09-15）：原实现是「f84 ÷ f87%」反推成交额，实测 378 只（6.4%）结果 = 0 ——
+        # 散户净额小于 5000 元时被舍入成 0，0/x = 0，连贵州茅台都中招（f6 显示成交 9.94 亿、反推得 0），
+        # 这些票会被下游「成交额 ≥5 亿」的流动性过滤直接踢出榜单。
+        amount_yi = to_float(item.get("f6")) / yi
+        if amount_yi > 0:
+            total_amount = round(amount_yi, 2)
+        elif small_pct != 0:
             total_amount = round(retail_net / (small_pct / 100), 2)
         elif super_pct != 0:
             total_amount = round(main_net / (super_pct / 100), 2)
