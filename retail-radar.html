@@ -606,10 +606,14 @@ td.col-highlight { background: rgba(245,185,66,0.06); font-weight: 700; }
 /* ═══ Search ═══ */
 .search-bar {
   margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .search-input {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   padding: 8px 14px;
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -623,6 +627,52 @@ td.col-highlight { background: rgba(245,185,66,0.06); font-weight: 700; }
 
 .search-input::placeholder { color: var(--dimmer); }
 .search-input:focus { border-color: var(--accent-dim); }
+
+/* 当前筛选状态（常驻可见，避免"为什么没数据"的困惑） */
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(180,83,9,0.08);
+  border: 1px solid var(--accent-dim);
+  color: var(--accent);
+  font-size: 11px;
+  font-family: 'Noto Sans SC', sans-serif;
+}
+.filter-chip .chip-x {
+  cursor: pointer;
+  font-size: 11px;
+  opacity: 0.7;
+  padding: 0 2px;
+}
+.filter-chip .chip-x:hover { opacity: 1; }
+
+/* 榜单空态：说清"为什么空"并给出下一步 */
+.empty-tip {
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 2;
+  text-align: center;
+  padding: 26px 18px;
+  font-family: 'Noto Sans SC', sans-serif;
+}
+.empty-btn {
+  margin: 6px 4px 0;
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-hi);
+  background: var(--card);
+  color: var(--dim);
+  font-size: 11.5px;
+  font-family: 'Noto Sans SC', sans-serif;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.empty-btn:hover { border-color: var(--accent-dim); color: var(--accent); }
+.empty-btn.primary { background: rgba(180,83,9,0.08); border-color: var(--accent-dim); color: var(--accent); }
 
 /* ═══ Content Grid ═══ */
 .content {
@@ -954,13 +1004,42 @@ td.code-cell { color: var(--dim); font-size: 10px; }
 
 /* ═══ 筹码动向表（可排序） ═══ */
 .chip-box { height: 600px; }
+/* ═══ 筹码说明（一行速读 + 折叠的口径详情） ═══ */
 .chip-note {
   margin: 12px 0 10px;
   font-size: 11px;
   line-height: 1.7;
   color: var(--dim);
   font-family: 'Noto Sans SC', sans-serif;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
+.note-toggle {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  color: var(--dim);
+  font-size: 10.5px;
+  font-family: 'Noto Sans SC', sans-serif;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.note-toggle:hover { color: var(--accent); border-color: var(--accent-dim); }
+.chip-help {
+  flex-basis: 100%;
+  margin-top: 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.9;
+  color: var(--dim);
+}
+.chip-help b { color: var(--text-hi); font-weight: 600; }
 
 /* ═══ Compliance Footer ═══ */
 .compliance-footer {
@@ -1228,6 +1307,7 @@ td.code-cell { color: var(--dim); font-size: 10px; }
   <!-- Search：只筛选当前榜单，与顶部「个股速查」不是一回事 -->
   <div class="search-bar">
     <input class="search-input" id="searchInput" placeholder="在当前榜单内筛选（代码 / 名称）…" oninput="filterTable()">
+    <span class="filter-chip" id="filterChip" style="display:none"></span>
   </div>
 
   <!-- Content -->
@@ -1259,7 +1339,7 @@ td.code-cell { color: var(--dim); font-size: 10px; }
   </div>
 
   <div class="table-box chip-box">
-    <p class="chip-note" id="chipNote"></p>
+    <div class="chip-note" id="chipNote"></div>
     <table>
       <thead id="chipHead"></thead>
       <tbody id="chipBody">
@@ -1441,16 +1521,13 @@ function renderFlow() {
   if (!allData?.retail_flow) return;
   if (!userSorted) applyDefaultSort();
   viewList = getBaseList();
+  updateFilterChip();     // 换榜单后筛选命中数会变，同步一下
   renderView();
 }
 
 function renderView() {
   const pf = PRIMARY_FIELD();
-  let list = viewList;
-  if (searchText) {
-    const q = searchText.toLowerCase();
-    list = list.filter(s => (s.code||'').toLowerCase().includes(q) || (s.name||'').toLowerCase().includes(q));
-  }
+  let list = viewList.filter(matchSearch);
   const col = sortCol;
   if (col) {
     const asc = sortAsc;
@@ -1472,7 +1549,7 @@ function renderView() {
 
 function renderChart(stocks, primaryField) {
   if (!stocks || stocks.length === 0) {
-    document.getElementById('chartArea').innerHTML = '<div style="color:var(--dim);text-align:center;padding:40px;">暂无数据</div>';
+    document.getElementById('chartArea').innerHTML = emptyStateHTML();
     return;
   }
   const isRetailSide = IS_RETAIL_SIDE();
@@ -1568,7 +1645,71 @@ function renderTable(stocks, primaryField) {
     '</tr>';
   }
   document.getElementById('tableHead').innerHTML = headHtml;
-  document.getElementById('tableBody').innerHTML = bodyHtml || '<tr><td colspan="' + ncols + '" style="text-align:center;color:var(--dim)">无匹配结果</td></tr>';
+  document.getElementById('tableBody').innerHTML = bodyHtml
+    || '<tr><td colspan="' + ncols + '">' + emptyStateHTML() + '</td></tr>';
+}
+
+/* ── 筛选与空态 ────────────────────────────────────────────────
+   榜单内筛选会同时作用于图表和表格（两者必须一致）。
+   筛选后为空时，不能只说"暂无数据" —— 要告诉用户：
+   这个词存不存在、这只票现在在哪个方向、以及下一句该点哪里。
+   ─────────────────────────────────────────────────────────── */
+function matchSearch(s) {
+  if (!searchText) return true;
+  const q = searchText.toLowerCase();
+  return (s.code || '').toLowerCase().includes(q) || (s.name || '').toLowerCase().includes(q);
+}
+function clearListFilter() {
+  searchText = '';
+  const inp = document.getElementById('searchInput');
+  if (inp) inp.value = '';
+  updateFilterChip();
+  renderView();
+}
+function updateFilterChip() {
+  const el = document.getElementById('filterChip');
+  if (!el) return;
+  if (!searchText) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const n = viewList.filter(matchSearch).length;
+  el.style.display = '';
+  el.innerHTML = '筛选中：' + searchText + ' · 命中 ' + n + ' 只'
+    + '<span class="chip-x" title="清除筛选" onclick="clearListFilter()">✕</span>';
+}
+function quickLookup(code) {
+  const inp = document.getElementById('quickInput');
+  if (!inp) return;
+  inp.value = code;
+  onQuickInput();
+  const p = document.getElementById('stockPanel');
+  if (p && p.scrollIntoView) p.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+function yi(v, color) {
+  const x = v || 0;
+  return '<span style="color:' + color + '">' + (x > 0 ? '+' : '') + x.toFixed(2) + ' 亿</span>';
+}
+function emptyStateHTML() {
+  if (!searchText) {
+    return '<div class="empty-tip">当前榜单暂无数据</div>';
+  }
+  const q = searchText, lq = q.toLowerCase();
+  const hits = (allData?.retail_flow || []).filter(s =>
+    (s.code || '').toLowerCase().includes(lq) || (s.name || '').toLowerCase().includes(lq));
+  if (!hits.length) {
+    return '<div class="empty-tip">全市场没有匹配「' + q + '」的股票<br>'
+      + '<button class="empty-btn" onclick="clearListFilter()">清除筛选</button></div>';
+  }
+  const s = hits.slice().sort((a, b) => (b.total_amount || 0) - (a.total_amount || 0))[0];
+  const name = s.name + '（' + s.code + '）';
+  const more = hits.length > 1 ? '等 ' + hits.length + ' 只' : '';
+  return '<div class="empty-tip">'
+    + '当前榜单里没有 <b>' + name + '</b>' + more + '<br>'
+    + '它现在是：散户 ' + yi(s.retail_net, (s.retail_net || 0) > 0 ? 'var(--red)' : 'var(--green)')
+    + ' · 中单 ' + yi(s.medium_net, (s.medium_net || 0) > 0 ? 'var(--red)' : 'var(--green)')
+    + ' · 主力 ' + yi(s.main_net, (s.main_net || 0) > 0 ? 'var(--blue)' : 'var(--green)')
+    + '<br>换个方向 / 榜单看看，或者 ——<br>'
+    + '<button class="empty-btn" onclick="clearListFilter()">清除筛选</button>'
+    + '<button class="empty-btn primary" onclick="quickLookup(\'' + s.code + '\')">在「个股速查」里看它全部指标</button>'
+    + '</div>';
 }
 
 // 筹码动向：一行一只股票，把「户数变化 × 主力持股 × 主力环比」合成一张可排序表
@@ -1677,26 +1818,27 @@ function renderChipFlow() {
   body.innerHTML = html;
 
   if (note) {
-    note.textContent =
-      '共 ' + rows.length.toLocaleString() + ' 只（按当前排序显示前 ' + shown.length + ' 行）　'
-      + '【这张表的列分三组，各回答一个问题】'
-      + '① 结构（锁定盘 / 自由流通）：这只票的筹码有多少被锁死、不参与日常博弈？'
-      + '锁定盘越高（中国石油 94%）A股股价越由锁仓方主导，越低（建设银行 8%）越由市面上流通的筹码定价。'
-      + '　② 博弈（散户 / 主力 / 一般法人）：在真正会动的筹码里三方各占多少，三档相加 = 100%。'
-      + '分母统一用「自由流通」，不再提供口径切换 —— 「占总股本」会被 A+H 公司的 H 股带偏'
-      + '（建设银行在那个口径下会显示"锁定盘 96.6%"，其实 A 股流通盘只锁了 8%），'
-      + '而「谁说了算」这个问题已经由「锁定盘」直接回答。'
-      + '　③ 变化（户数变化 / 主力环比）：结构在往哪边移。两者已对齐同一季度窗口（'
-      + (cf.prev_period || '--') + ' → ' + (cf.period || '--') + '）；'
-      + '按月披露户数的公司（变化窗口只有 1 个月）已置为 --，避免和季频的 3 个月变化混排。'
-      + '　【自由流通怎么判定】产业资本类（投资公司 / 其它非陆股通 / 员工持股）无条件锁定；'
-      + '财务投资类（公募 / 社保 / QFII / 私募 / 保险资管产品 / 券商 / 理财 / 信托 / 年金）不锁；'
-      + '个人与保险公司本身按 ≥3% 锁定；陆股通永不锁。'
-      + '　【两个容易踩的坑】「股东户数」是全部账户总数（含机构），只能看"人多不多"——'
-      + '判断力量对比必须看持股占比，因为户数是等权的、钱是加权的；'
-      + '「一般法人」这一档里混着陆股通，而且控股股东本身是保险/券商时（平安银行、中国人寿）会被算进「主力」。'
-      + '　【典型读法】户数下降 + 主力环比上升 = 筹码在向机构集中；户数上升 + 主力环比下降 = 向散户扩散。';
+    const sortLabel = (CHIP_COLS.find(c => c.key === chipSortCol) || {}).label || chipSortCol;
+    note.innerHTML =
+      '<span>' + rows.length.toLocaleString() + ' 只 · 显示前 ' + shown.length + ' 行 · 按「'
+      + sortLabel + '」' + (chipSortAsc ? '升序' : '降序') + ' · 点表头换排序</span>'
+      + '<button class="note-toggle" onclick="toggleChipHelp()">口径说明</button>'
+      + '<div class="chip-help" id="chipHelp"' + (chipHelpOpen ? '' : ' style="display:none"') + '>'
+      + '<div><b>结构</b>锁定盘 = 100% − 自由流通，越高越由锁仓方定价（中国石油 94% / 建设银行 8%）。</div>'
+      + '<div><b>博弈</b>散户 / 主力 / 一般法人三档都占「自由流通」，相加 = 100%。</div>'
+      + '<div><b>变化</b>户数变化与主力环比同一窗口（' + (cf.prev_period || '--') + ' → ' + (cf.period || '--')
+      + '）；按月披露户数的公司记 --，不与季频混排。</div>'
+      + '<div><b>自由流通怎么算</b>产业资本（投资公司 / 其它 / 员工持股）锁定；公募 / 社保 / QFII / 券商 / 保险等不锁；陆股通永不锁。</div>'
+      + '<div><b>两个坑</b>股东户数是全部账户总数，只能看"人多不多"，比值要用持股占比（户数等权、钱加权）；「一般法人」里混着陆股通。</div>'
+      + '</div>';
   }
+}
+
+let chipHelpOpen = false;
+function toggleChipHelp() {
+  chipHelpOpen = !chipHelpOpen;
+  const el = document.getElementById('chipHelp');
+  if (el) el.style.display = chipHelpOpen ? '' : 'none';
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -2077,6 +2219,7 @@ function toast(msg) {
 
 function filterTable() {
   searchText = document.getElementById('searchInput').value.trim();
+  updateFilterChip();
   if (!allData?.retail_flow) return;
   renderView();
 }

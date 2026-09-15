@@ -134,6 +134,8 @@ circ_ratio                         流通A股/总股本 %
 11. **自选每次改动前先 `loadWatchlist()` 读盘**（多标签页防覆盖，别优化掉）。
 12. **排序解耦**：`getBaseList()` 只做 filter，`applyDefaultSort()` 只设排序键与方向，`renderView()` 才真正渲染。别合并。
 13. **休市判断必须走日历**：不要把节假日硬编码进前端（周末判定除外），也不要因为日历加载失败就把刷新关掉 —— 缺日历时的正确行为是**退回「只看工作日」**（宁可多刷一次）。`isMarketClosed()` / `isHoliday()` 的返回值语义别改。
+14. **榜单内的筛选会同时作用于图表和表格**（两者必须一致，别只筛表格）。筛选后为空时**不能只显示"暂无数据"**：`emptyStateHTML()` 必须继续告诉用户"这个词有没有这只票、它现在三档净额是多少、下一步点哪里"。`filter-chip`（筛选中 · 命中 N 只 + ✕）是让筛选状态常驻可见的，别删。
+15. **筹码表的说明文案必须保持一行速读**：详细口径收在 `口径说明` 折叠面板里（`chipHelpOpen` 记忆展开状态，别每次渲染都重置）。不要把这些文字再摊回页面上。
 
 ---
 
@@ -143,8 +145,9 @@ circ_ratio                         流通A股/总股本 %
 ```
 Header 76 · Section Headers 263 · KPI Cards 321 · Tabs 532 · Search 606
 Content Grid 627 · Table 696 · 自选星标 799 · 速查/自选工具条 817
-个股面板 877 · Toast 936 · 筹码表 955 · Compliance Footer 965
+个股面板 877 · Toast 936 · 筹码说明 955 · Compliance Footer 965
 Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
+（Search 区块里还有 `.filter-chip` 筛选状态 chip 与 `.empty-tip` / `.empty-btn` 空态样式）
 ```
 
 ### 页面区块（`<body>` 内）
@@ -162,6 +165,9 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 |---|---|
 | `fetchData()` / `render()` | 拉数据 → 渲染全部区块；数据刷新后会 `_universe = null` 重建索引 |
 | `getBaseList()` / `applyDefaultSort()` / `renderView()` | 榜单：filter / 设排序 / 渲染 |
+| `matchSearch()` / `filterTable()` / `clearListFilter()` / `updateFilterChip()` | 榜单内筛选（同时作用于图表与表格）+ 常驻筛选状态 chip |
+| `emptyStateHTML()` / `quickLookup()` | 空态解释（这个词有没有、这只票现在什么方向）+ 一键跳「个股速查」 |
+| `toggleChipHelp()` | 筹码表「口径说明」折叠面板 |
 | `renderChart(stocks, field)` | 手写 SVG 条形图 |
 | `renderTable(stocks, field)` | 榜单表格（8 列，含 ☆） |
 | `renderChipFlow()` / `chipSortTable(col)` | 筹码表（9 列，默认按户数变化升序，只渲染前 300 行） |
