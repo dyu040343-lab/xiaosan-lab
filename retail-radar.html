@@ -1734,7 +1734,11 @@ const SP_COLS = [
   {key:'inst_delta',   label:'主力环比', tip:'机构持股的季度环比（百分点）。与「户数变化」同一时间窗口'},
 ];
 
-/* ── 自选读写 ── */
+/* ── 自选读写 ──
+   localStorage 是唯一事实来源：
+   1) 每次改动前先 loadWatchlist() 重新读盘，避免多标签页互相覆盖（后写的把先写的抹掉）
+   2) 监听 storage 事件，别的标签页改了自选，本页同步刷新
+   ───────────── */
 function loadWatchlist() {
   try {
     const v = JSON.parse(localStorage.getItem(WL_KEY) || '[]');
@@ -1745,6 +1749,12 @@ function saveWatchlist() {
   try { localStorage.setItem(WL_KEY, JSON.stringify(watchlist)); } catch (e) {}
 }
 function isWatched(code) { return watchlist.indexOf(code) >= 0; }
+function syncStars() {
+  document.querySelectorAll('[data-star]').forEach(n => {
+    const c = n.getAttribute('data-star');
+    n.classList.toggle('on', isWatched(c));
+  });
+}
 function updateWatchCount() {
   const el = document.getElementById('watchCount');
   if (el) el.textContent = watchlist.length;
@@ -1757,6 +1767,7 @@ function starBtn(code) {
 }
 function toggleWatch(code, ev) {
   if (ev) ev.stopPropagation();
+  loadWatchlist();          // 先同步盘上最新状态，防止覆盖别的标签页的改动
   const i = watchlist.indexOf(code);
   if (i >= 0) { watchlist.splice(i, 1); toast('已移出自选'); }
   else { watchlist.push(code); toast('已加入自选 ★'); }
@@ -1767,6 +1778,7 @@ function toggleWatch(code, ev) {
   if (panelMode === 'watch') openWatchPanel();
 }
 function clearWatch() {
+  loadWatchlist();
   if (!watchlist.length) { toast('自选已经是空的'); return; }
   if (!window.confirm('确认清空 ' + watchlist.length + ' 只自选？')) return;
   watchlist = [];
@@ -1803,6 +1815,7 @@ function importWatch() {
   if (s === null) return;
   const codes = s.split(/[\s,，;；]+/).map(x => x.trim()).filter(Boolean);
   if (!codes.length) { toast('没有识别到代码'); return; }
+  loadWatchlist();          // 先同步盘上最新状态
   const map = universe();
   let added = 0, unknown = 0;
   for (const c of codes) {
@@ -2207,6 +2220,15 @@ document.addEventListener('keydown', e => {
     const inp = document.getElementById('quickInput');
     if (inp) { inp.focus(); inp.select(); }
   }
+});
+
+// 多标签页同步：另一个标签页改了自选（localStorage 变了），本页跟着刷新
+window.addEventListener('storage', e => {
+  if (e.key !== null && e.key !== WL_KEY) return;   // key === null 表示 localStorage.clear()
+  loadWatchlist();
+  updateWatchCount();
+  syncStars();                                       // 已渲染的表格直接改星标，不必重排
+  if (panelMode === 'watch') openWatchPanel();
 });
 </script>
 </body>
