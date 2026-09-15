@@ -1676,16 +1676,19 @@ function getBaseList() {
       stocks = stocks.filter(s => (s[pf]||0) > 0); break;
     case 'netout': case 'medium_netout': case 'main_netout':
       stocks = stocks.filter(s => (s[pf]||0) < 0); break;
-    // 资金占比动向 tab（口径B全区间）：不加方向 filter，TOP=最正，BOTTOM=最负
+    // 资金占比动向：TOP 只看正值，BOTTOM 只看负值，避免榜单跨过零轴。
     case 'retail_ratio_top':
     case 'retail_ratio_bottom':
-      stocks.forEach(s => s._ratio = s.dynamic_ratio || 0); break;
+      stocks.forEach(s => s._ratio = s.dynamic_ratio || 0);
+      stocks = stocks.filter(s => currentSub === 'retail_ratio_top' ? s._ratio > 0 : s._ratio < 0);
+      break;
     case 'main_ratio_top':
     case 'main_ratio_bottom':
       stocks.forEach(s => {
         const amt = s.total_amount || 0;
         s._ratio = amt > 0.01 ? (s.main_net || 0) / amt * 100 : 0;
       });
+      stocks = stocks.filter(s => currentSub === 'main_ratio_top' ? s._ratio > 0 : s._ratio < 0);
       break;
   }
   // 占比 tab：流动性过滤（剔除成交额 < 门槛的票，阈值见 LIQUIDITY_MIN）
