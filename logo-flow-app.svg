@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+  <title>小散研究院 App 图标</title>
+  <defs>
+    <linearGradient id="bg" x1="146" y1="112" x2="880" y2="914" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EDF4F6"/>
+      <stop offset="1" stop-color="#E4F0EB"/>
+    </linearGradient>
+  </defs>
+  <rect x="52" y="52" width="920" height="920" rx="260" fill="url(#bg)"/>
+  <path d="M782 300C648 244 427 266 312 347C217 414 247 510 362 545L633 626C737 657 715 744 611 781C493 824 335 797 246 742" stroke="#294B5B" stroke-width="128" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

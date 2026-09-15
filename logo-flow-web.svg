@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <title>小散研究院</title>
+  <rect x="2" y="2" width="60" height="60" rx="18" fill="#EAF1F3"/>
+  <path d="M49 18.5C40.5 15 26.5 16.4 19.2 21.6C13.2 25.8 15.1 31.9 22.4 34.1L39.6 39.2C46.2 41.2 44.8 46.7 38.2 49.1C30.7 51.8 20.7 50.1 15 46.6" stroke="#294B5B" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
