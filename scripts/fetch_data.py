@@ -356,17 +356,40 @@ HOLDER_COLUMNS = ("SECURITY_CODE,SECURITY_NAME_ABBR,END_DATE,HOLDER_NUM,PRE_HOLD
 HOLDER_MIN_PRE_NUM = 1000       # 上期户数下限：低于此视为披露口径不可比
 HOLDER_CHG_LIMIT = 1000.0       # 变化幅度上限（+1000%）；另剔除 ≤ -99.99% 的异常
 
-# 口径版本号：改了结构就 +1，让当天缓存失效重算（10 = 自由流通三段归一化到 100）
-HOLDER_DIST_VERSION = 10
+# 口径版本号：改了结构就 +1，让当天缓存失效重算
+# 11 = 自由流通改「性质 + 比例」组合判定（阈值 5%→3%）
+#    + 户数变化与机构持股严格对齐报告期（避免 1 个月/3 个月变化混排）
+#    + 新增锁定盘占比 lock_ratio
+# 12 = 锁定盘主口径改为「A 股视角」（100 − 自由流通），另存 lock_ts 作总股本口径对照
+HOLDER_DIST_VERSION = 12
 
 # 机构持股分类（RPT_MAIN_ORGHOLD 的 ORG_TYPE）
 ORGHOLD_ORG_TOTAL = "00"   # 机构汇总 = 机构 + 一般法人 合计占流通股比
 ORGHOLD_ORG_LEGAL = "07"   # 其他 = 一般法人（大股东 / 产业资本）+ 陆股通等未单独分类的机构
 
-# 自由流通股口径（2026-09-14 用户拍板）：**前十大流通股东中「占总股本 ≥5%」视为锁定筹码**
-# 依据：≥5% 是举牌线，这类股东多为控股股东 / 战略投资者，长期不参与博弈。
-# 例外：**陆股通必须排除** —— 北向资金经常 >5%（宁德时代 19.97%），但它本身就是自由流通。
-FREE_FLOAT_LOCK_PCT = 5.0
+# ── 自由流通股口径（2026-09-15 v2：按「股东性质 + 持股比例」组合判定）──
+# 为什么改：用户指出「自由流通 = 真正会动的流通筹码」，而 v1 只看「≥5%」这一个比例，
+# 会把 1~5% 的产业资本（国资平台、关联公司、员工持股）当成会动的筹码 → 系统性高估自由流通。
+# 依据：以东财自带 FREELIQCI_SHARES（2026 年 3,591 只有值）为基准做参数扫描 ——
+#   「性质 + ≥3%」组合的中位偏差 3.1pp；且必须把「个人大股东」也锁定（不锁偏差翻倍到 6.7pp）。
+#   ① 产业资本类 → 无条件锁定（无论占比多少，都不参与日常博弈）
+#   ② 财务投资类 → 无条件自由（它们本来就是在动的钱）
+#   ③ 其余（个人、保险公司本身）→ 占流通A股 ≥ FREE_FLOAT_LOCK_PCT 才锁
+#   ④ 陆股通 → 永不锁（北向资金本身就是自由流通的通道）
+FREE_FLOAT_LOCK_PCT = 3.0
+
+# 只拉「占流通A股 ≥1%」的股东记录（约 60 页）：<1% 的持仓对锁定比例影响可忽略，
+# 又能把请求量压在接口深分页上限（约 100 页 / 5 万条）之内。
+FREEHOLD_MIN_RATIO = 1.0
+
+# 产业资本：控股平台 / 国资平台 / 未分类法人 / 员工持股 —— 长期不动
+CAPITAL_TYPES = {"投资公司", "其它", "员工持股计划"}
+
+# 财务投资：公募 / 社保 / 养老 / QFII / 私募 / 券商 / 保险资管产品 / 理财 / 信托 / 年金 —— 会调仓
+# 注意「保险公司」（集团本身）与「保险产品」（资管产品）是两类：前者走 ③ 按比例判，后者在此不锁
+FINANCIAL_TYPES = {"证券投资基金", "基金管理公司", "全国社保基金", "基本养老基金",
+                   "保险产品", "证券公司", "QFII", "私募基金", "集合理财计划",
+                   "信托计划", "其他理财产品", "企业年金"}
 
 # 锁定筹码要落到「哪一段」里去扣（否则会出现 主力占自由流通 1300% 这种数）
 # 依据 2026-09-14 实测：证券投资基金进 01 基金 → 主力；而「私募基金」和「券商资管 FOF」
@@ -506,8 +529,8 @@ def _freehold_query(extra, page_size=500, page_number=1):
 def fetch_float_lock(period):
     """自由流通股：算出每只股票的「锁定比例」（占流通A股），供前端算自由流通口径
 
-    规则（用户 2026-09-14 拍板）：**前十大流通股东中，占总股本 ≥5% 的股东视为锁定筹码**；
-    **陆股通必须排除** —— 北向资金经常 >5%（宁德时代 19.97%），但它本身就是自由流通。
+    规则（2026-09-15 v2）：按「股东性质 + 持股比例」组合判定，详见上方 CAPITAL_TYPES 注释。
+    核心是回答「哪些筹码是真正会动的」—— 大股东持股虽然也登记在流通盘里，但实际并不动。
 
     ⚠️ 两个比例字段的语义与直觉相反，已用中石油 / 工行实测校正，别搞反：
     - `LISTED_SHARES_RATIO` = **占流通A股**比例（中石油集团 92.997% = 1509.2÷1619.2）
@@ -518,11 +541,11 @@ def fetch_float_lock(period):
     归到锁定筹码所属的那一段）；不在表里的股票视为全 0，即全部自由流通。
     分子分母必须同源：锁定筹码要从它所在的段里扣掉，否则会出现「主力占自由流通 1300%」。
     """
-    print("🔍 正在获取自由流通股口径（前十大中 ≥5% 股东 = 锁定）...")
+    print("🔍 正在获取自由流通股口径（性质 + 比例组合判定）...")
     try:
-        flt = f"(END_DATE='{period}')(LISTED_SHARES_RATIO>={FREE_FLOAT_LOCK_PCT})"
+        flt = f"(END_DATE='{period}')(LISTED_SHARES_RATIO>={FREEHOLD_MIN_RATIO})"
         rows, page = [], 1
-        while page <= 40:
+        while page <= 120:
             batch = _freehold_query(
                 {"filter": flt, "sortColumns": "SECURITY_CODE", "sortTypes": "1"},
                 page_size=500, page_number=page)
@@ -541,11 +564,16 @@ def fetch_float_lock(period):
             if not code:
                 continue
             if str(r.get("IS_LANDSTOCK")) == "1":
-                continue                                  # 北向资金算自由流通，不锁定
+                continue                                  # ④ 北向资金本就是自由流通，永不锁定
             listed = float(r.get("LISTED_SHARES_RATIO") or 0)
             if listed <= 0:
                 continue
-            seg = LOCK_TYPE_SEGMENT.get(str(r.get("HOLDER_TYPE") or "").strip(), "legal")
+            htype = str(r.get("HOLDER_TYPE") or "").strip()
+            if htype in FINANCIAL_TYPES:
+                continue                                  # ② 财务投资：就是在动的钱，不锁
+            if htype not in CAPITAL_TYPES and listed < FREE_FLOAT_LOCK_PCT:
+                continue                                  # ③ 个人 / 保险公司本身：按比例判
+            seg = LOCK_TYPE_SEGMENT.get(htype, "legal")   # ① 产业资本：无条件锁
             slot = lock.setdefault(code, {"inst": 0.0, "legal": 0.0, "retail": 0.0})
             slot[seg] += listed
 
@@ -572,7 +600,8 @@ def build_chip_flow(by_code, holder_rows, periods, total_map, legal_map, prev_to
     - `inst_pct`    主力（投资机构）持股占流通比 ← 筹码在不在机构手里
     - `inst_delta`  主力持股环比（百分点）  ← 机构在加还是减（比"高不高"更重要）
     - `retail_pct`  散户及其他占流通比      ← 散户锚点
-    - `float_ratio` 自由流通A股/流通A股 (%) ← 剔除 ≥5% 股东后的"可博弈筹码"占比
+    - `float_ratio` 自由流通A股/流通A股 (%) ← 剔除「不动的筹码」后的可博弈占比
+    - `lock_ratio`  锁定盘/总股本 (%)       ← (总股本 − 自由流通A股)/总股本，看这家公司谁说了算
     - `circ_ratio`  流通A股/总股本 (%)      ← 换算总股本口径用
 
     三个占比列（inst_pct / legal / retail_pct）都以**流通A股**为分母，
@@ -581,14 +610,18 @@ def build_chip_flow(by_code, holder_rows, periods, total_map, legal_map, prev_to
 
     典型读法：户数降 + 主力环比升 = 筹码在向机构集中（吸筹）
 
-    注意 `holder_chg` 有一道**有效性闸门**：上期户数低于 HOLDER_MIN_PRE_NUM 或幅度
-    超过 HOLDER_CHG_LIMIT 的记录一律置为 None（不是 0），前端显示 `--` 并排到末尾。
-    否则北交所新股那种「10 户 → 81,020 户 = +810100%」会霸占默认的升/降序榜首。
+    注意 `holder_chg` 有两道闸门，命中一律置为 None（不是 0），前端显示 `--` 并沉底：
+    1. **时间口径闸门**：户数报告期必须等于机构持股报告期，否则「1 个月变化」和「3 个月变化」
+       混在同一列排序，对比毫无意义。
+    2. **有效性闸门**：上期户数低于 HOLDER_MIN_PRE_NUM 或幅度超过 HOLDER_CHG_LIMIT ——
+       否则北交所新股那种「10 户 → 81,020 户 = +810100%」会霸占默认的升/降序榜首。
     """
     print("🔍 正在合成筹码动向表（户数变化 × 主力持股 × 环比）...")
     try:
+        cur_period = periods[0] if periods else ""
         holder_map = {}
         invalid_chg = 0
+        period_mismatch = 0
         for r in holder_rows:
             code = r.get("SECURITY_CODE")
             if not code:
@@ -596,9 +629,17 @@ def build_chip_flow(by_code, holder_rows, periods, total_map, legal_map, prev_to
             ratio = r.get("HOLDER_NUM_RATIO")
             chg = round(float(ratio), 2) if ratio is not None else None
             prev_num = int(r.get("PRE_HOLDER_NUM") or 0)
+            end_date = (r.get("END_DATE") or "")[:10]
+            # ⚠️ 时间口径闸门（用户 2026-09-15 明确要求）：户数的变化是「本期 vs 上期」，
+            # 机构持股的变化是「本季 vs 上季」。A 股有部分公司**按月披露**股东户数，
+            # 那类记录的变化窗口只有 1 个月 —— 和季频的 3 个月放在同一列排序毫无可比性。
+            # 所以报告期与机构持股不一致的，一律不计算变化（置 None，前端显示 -- 并沉底）。
+            if chg is not None and end_date != cur_period:
+                chg = None
+                period_mismatch += 1
             # 次新股上市首期：上市前只有发起人账户（上期常常只有几户），口径不可比
-            if chg is not None and (prev_num < HOLDER_MIN_PRE_NUM
-                                    or chg >= HOLDER_CHG_LIMIT or chg <= -99.99):
+            elif chg is not None and (prev_num < HOLDER_MIN_PRE_NUM
+                                      or chg >= HOLDER_CHG_LIMIT or chg <= -99.99):
                 chg = None
                 invalid_chg += 1
             holder_map[code] = (int(r.get("HOLDER_NUM") or 0), chg)
@@ -644,6 +685,14 @@ def build_chip_flow(by_code, holder_rows, periods, total_map, legal_map, prev_to
             ts = stock.get("total_shares") or 0
             cs = stock.get("circ_shares") or 0
             circ_ratio = round(cs / ts * 100, 2) if ts > 0 and cs > 0 else 100.0
+            # ── 锁定盘 ── 回答「A 股股价是谁说了算」
+            # 主口径 = 100 − 自由流通/流通A股，即「A 股市场里被锁住、不参与日常博弈的筹码占比」。
+            # ⚠️ 不能拿「占总股本」当主口径 —— A+H 公司会被 H 股带偏：建设银行 H 股占总股本 96%，
+            #    (总股本−自由流通A股)/总股本 = 96.6%，看着像大股东一手遮天；
+            #    但 A 股流通盘里其实只有 8% 被锁。所以两个都算，前端主用前者，后者留作对照。
+            free_over_ts = free * circ_ratio / 100.0
+            lock_ratio = round(max(100.0 - free, 0.0), 2)              # 占流通A股（主口径）
+            lock_ts = round(max(100.0 - free_over_ts, 0.0), 2)         # 占总股本（含 H股/限售）
             rows.append({
                 "code": code,
                 "name": stock.get("name", ""),
@@ -655,6 +704,8 @@ def build_chip_flow(by_code, holder_rows, periods, total_map, legal_map, prev_to
                 "legal_pct": round(legal, 2),
                 "float_ratio": free,
                 "circ_ratio": circ_ratio,
+                "lock_ratio": lock_ratio,
+                "lock_ts": lock_ts,
                 "lock_inst": round(li, 2),
                 "lock_legal": round(ll, 2),
                 "lock_retail": round(lr, 2),
@@ -672,7 +723,7 @@ def build_chip_flow(by_code, holder_rows, periods, total_map, legal_map, prev_to
         rows.sort(key=lambda x: (x["holder_chg"] is None,
                                  x["holder_chg"] if x["holder_chg"] is not None else 0))
         print(f"  ✅ 筹码动向 {len(rows)} 只（{periods[0]} vs {periods[1] if len(periods) > 1 else '无'}）"
-              f"｜户数变化不可比已剔除 {invalid_chg} 只")
+              f"｜户数变化置空：报告期未对齐 {period_mismatch} 只 / 口径不可比 {invalid_chg} 只")
         return {
             "period": periods[0] if periods else "",
             "prev_period": periods[1] if len(periods) > 1 else None,
@@ -725,7 +776,7 @@ def build_holder_chip(stocks):
         prev_total = _orghold_ratio_map(prev_period, ORGHOLD_ORG_TOTAL) if prev_period else {}
         prev_legal = _orghold_ratio_map(prev_period, ORGHOLD_ORG_LEGAL) if prev_period else {}
 
-        # 自由流通股口径：前十大流通股东中 ≥5% 的 = 锁定（陆股通除外）
+        # 自由流通股口径：前十大流通股东按「性质 + 比例」判定是否锁定（陆股通除外）
         lock_map = fetch_float_lock(cur_period)
 
         # 筹码动向表：户数变化 × 主力持股 × 环比（前端可排序）

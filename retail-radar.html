@@ -1065,7 +1065,7 @@ td.code-cell { color: var(--dim); font-size: 10px; }
 
   <!-- ═══════ 股东户数 · 筹码动向（点表头排序） ═══════ -->
   <div class="section-header">
-    <h2>股东户数与筹码动向</h2>
+    <h2>筹码结构与变化</h2>
     <span class="freq-tag quarterly"><span class="freq-tag-dot"></span>季度披露 · 点表头切换升 / 降序 · 覆盖全市场</span>
   </div>
 
@@ -1075,7 +1075,7 @@ td.code-cell { color: var(--dim); font-size: 10px; }
     <table>
       <thead id="chipHead"></thead>
       <tbody id="chipBody">
-        <tr><td colspan="8" style="text-align:center;color:var(--dim);padding:40px;">加载中...</td></tr>
+        <tr><td colspan="9" style="text-align:center;color:var(--dim);padding:40px;">加载中...</td></tr>
       </tbody>
     </table>
   </div>
@@ -1383,12 +1383,15 @@ function renderTable(stocks, primaryField) {
 // 筹码动向：一行一只股票，把「户数变化 × 主力持股 × 主力环比」合成一张可排序表
 let chipSortCol = 'holder_chg', chipSortAsc = true;
 
-// 占比分母口径：circ=占流通A股（默认）/ free=占自由流通 / total=占总股本
-let chipBasis = 'circ';
+// 占比分母口径 —— 三个分母回答三个不同的问题：
+//   free  = 占自由流通（默认）：真正可交易的筹码里，散户和主力谁强 → 博弈关系
+//   total = 占总股本          ：对该公司的整体持股影响力
+//   circ  = 占流通A股         ：行业惯例口径，保留作对照
+let chipBasis = 'free';
 const CHIP_BASIS = [
-  {key: 'circ',  label: '占流通A股'},
   {key: 'free',  label: '占自由流通'},
   {key: 'total', label: '占总股本'},
+  {key: 'circ',  label: '占流通A股'},
 ];
 // 三档占比列：key 是「占流通A股」的字段，ff=占自由流通、ts=占总股本的对应字段
 // （字段名由后端给出，不是简单拼后缀：inst_pct 的自由流通字段叫 inst_ff，不是 inst_pct_ff）
@@ -1398,15 +1401,25 @@ const CHIP_PCT_COLS = [
   {key: 'retail_pct', ff: 'retail_ff', ts: 'retail_ts'},
 ];
 
+// 列顺序 = 先「结构」（谁说了算）→ 再「存量」（筹码在各档手里）→ 最后「变化」（同口径可对比）
 const CHIP_COLS = [
   {key: 'name',        label: '股票'},
-  {key: 'holder_chg',  label: '户数变化'},
-  {key: 'holders',     label: '股东户数'},
-  {key: 'float_ratio', label: '自由流通'},
-  {key: 'inst_pct',    label: '主力持股'},
-  {key: 'inst_delta',  label: '主力环比'},
-  {key: 'legal_pct',   label: '一般法人'},
-  {key: 'retail_pct',  label: '散户及其他'},
+  {key: 'lock_ratio',  label: '锁定盘',
+   tip: 'A股市场里被大股东锁住、不参与日常博弈的筹码占比（占流通A股）= 100% − 自由流通。越高越说明股价由锁仓方主导'},
+  {key: 'float_ratio', label: '自由流通',
+   tip: '自由流通A股 ÷ 流通A股。剔除不动的筹码后，真正会动、可博弈的比例'},
+  {key: 'retail_pct',  label: '散户',
+   tip: '散户及其他持股，分母见上方口径切换器（默认占自由流通）'},
+  {key: 'inst_pct',    label: '主力',
+   tip: '投资机构持股：公募基金 / 社保 / QFII / 券商 / 保险 / 信托等'},
+  {key: 'legal_pct',   label: '一般法人',
+   tip: '产业资本 + 陆股通（北向），东财把它们一并归在「其他」档'},
+  {key: 'holders',     label: '股东户数',
+   tip: '全部股东账户总数（含机构）。机构占比极小，所以它≈散户人数，用于看「人多不多」'},
+  {key: 'holder_chg',  label: '户数变化',
+   tip: '股东户数环比。已与「主力环比」对齐同一季度窗口；按月披露户数的公司（窗口只有1个月）已置为 --'},
+  {key: 'inst_delta',  label: '主力环比',
+   tip: '机构持股占流通A股的季度环比（百分点）。与「户数变化」同一时间窗口'},
 ];
 
 // 按当前口径取某一档的占比
@@ -1460,7 +1473,7 @@ function renderChipFlow() {
   head.innerHTML = '<tr>' + CHIP_COLS.map(c => {
     let cls = 'sortable';
     cls += chipSortCol === c.key ? (chipSortAsc ? ' sort-asc' : ' sort-desc') : ' sort-none';
-    return '<th class="' + cls + '" onclick="chipSortTable(\'' + c.key + '\')">'
+    return '<th class="' + cls + '" title="' + (c.tip || '') + '" onclick="chipSortTable(\'' + c.key + '\')">'
       + c.label + '<span class="sort-icon"></span></th>';
   }).join('') + '</tr>';
 
@@ -1488,18 +1501,22 @@ function renderChipFlow() {
     : '<td style="color:' + color + '">' + v.toFixed(2) + '%</td>';
   let html = '';
   for (const x of shown) {
+    const lockTxt = (x.lock_ratio === null || x.lock_ratio === undefined)
+      ? '<span style="color:var(--dim)">--</span>'
+      : '<span style="font-weight:500">' + x.lock_ratio.toFixed(1) + '%</span>';
     html += '<tr>' +
       '<td class="name-cell">' + x.name + '</td>' +
-      aCol(x.holder_chg, v => v > 0 ? 'var(--red)' : v < 0 ? 'var(--green)' : 'var(--dim)') +
-      '<td>' + (x.holders ? x.holders.toLocaleString() : '--') + '</td>' +
+      '<td>' + lockTxt + '</td>' +
       '<td style="color:var(--dim)">' + (x.float_ratio || 0).toFixed(1) + '%</td>' +
+      pCol(chipVal(x, 'retail_pct'), 'var(--red)') +
       pCol(chipVal(x, 'inst_pct'), 'var(--blue)') +
+      pCol(chipVal(x, 'legal_pct'), 'var(--amber, #B45309)') +
+      '<td>' + (x.holders ? x.holders.toLocaleString() : '--') + '</td>' +
+      aCol(x.holder_chg, v => v > 0 ? 'var(--red)' : v < 0 ? 'var(--green)' : 'var(--dim)') +
       '<td style="color:' + (x.inst_delta === null || x.inst_delta === undefined ? 'var(--dim)'
         : x.inst_delta > 0 ? 'var(--blue)' : x.inst_delta < 0 ? 'var(--green)' : 'var(--dim)') + '">' +
         (x.inst_delta === null || x.inst_delta === undefined ? '--'
           : (x.inst_delta > 0 ? '+' : '') + x.inst_delta.toFixed(2) + 'pp') + '</td>' +
-      pCol(chipVal(x, 'legal_pct'), 'var(--amber, #B45309)') +
-      pCol(chipVal(x, 'retail_pct'), 'var(--red)') +
     '</tr>';
   }
   body.innerHTML = html;
@@ -1509,16 +1526,26 @@ function renderChipFlow() {
     // 总股本口径下三段加总 = 流通A股/总股本，剩下的才是 H股+限售股
     const sumTip = chipBasis === 'total'
       ? '三档加总 = 该股「流通A股 ÷ 总股本」，差额是 H股与限售股（不在流通盘里）。'
-      : '三档（主力 / 一般法人 / 散户及其他）加总 = 100%。';
-    note.textContent = '共 ' + rows.length.toLocaleString() + ' 只，已按当前排序显示前 ' + shown.length + ' 行｜'
-      + '当前分母：' + basisLabel + '｜' + sumTip
-      + '户数变化 = 股东户数环比（披露口径，上市首期不可比的已置为 --，报告期 ' + (cf.period || '--') + '）；'
-      + '主力持股 = 投资机构持股；主力环比 = 与上一报告期（' + (cf.prev_period || '--') + '）的百分点差。'
-      + '「自由流通」= 自由流通A股 ÷ 流通A股（口径：前十大流通股东中占总股本 ≥5% 的视为锁定筹码，'
-      + '陆股通不锁定——它本身就是自由流通；锁定筹码已从其所属那一档扣除）。'
-      + '口径提醒：陆股通与产业资本被东财一并归入「其他」→ 落在「一般法人」这一档；'
-      + '若控股股东本身是保险/券商等金融机构（如平安银行、中国人寿），它登记在「主力」档里。'
-      + '典型读法：户数下降 + 主力环比上升 = 筹码在向机构集中；户数上升 + 主力环比下降 = 筹码在向散户扩散。';
+      : (chipBasis === 'free'
+          ? '三档加总 = 100%，分母是**真正会动的自由流通盘**。'
+          : '三档加总 = 100%，分母是全部流通A股。');
+    note.textContent =
+      '共 ' + rows.length.toLocaleString() + ' 只（按当前排序显示前 ' + shown.length + ' 行）｜当前分母：' + basisLabel + '｜' + sumTip
+      + '　【锁定盘】= 100% − 自由流通，即 A 股市场里被大股东锁住、不参与日常博弈的筹码占比 ——'
+      + '越高越说明 A 股股价由锁仓方主导（中国石油 94%），越低越说明由市面上流通的筹码定价（建设银行 8%）。'
+      + '　【自由流通】= 自由流通A股 ÷ 流通A股，剔除不动的筹码后真正可博弈的比例，与「锁定盘」互补（相加 100%）。'
+      + '　⚠️ A+H 公司注意：若改按「(总股本 − 自由流通A股) ÷ 总股本」算（含 H 股与限售股），'
+      + '建设银行会得到 96.6% —— 那是它 H 股占总股本 96% 造成的，不代表大股东控制力强；'
+      + '所以主口径采用 A 股视角，这样 A+H 公司不会被 H 股带偏。'
+      + '　【判定规则】产业资本类（投资公司 / 其它非陆股通 / 员工持股）无条件锁定；'
+      + '财务投资类（公募 / 社保 / QFII / 私募 / 保险资管产品 / 券商 / 理财 / 信托 / 年金）不锁；'
+      + '个人与保险公司本身按占流通A股 ≥3% 锁定；陆股通永不锁。锁定筹码已从其所属那一档中扣除。'
+      + '　【变化列的时间口径】户数变化与主力环比已对齐同一季度窗口（'
+      + (cf.prev_period || '--') + ' → ' + (cf.period || '--') + '）——'
+      + '按月披露股东户数的公司（变化窗口只有 1 个月）已置为 --，避免与季频的 3 个月变化混排。'
+      + '　口径提醒：陆股通与产业资本被东财一并归入「其他」→ 落在「一般法人」这一档；'
+      + '控股股东本身是保险 / 券商等金融机构时（如平安银行、中国人寿），它登记在「主力」档里。'
+      + '　典型读法：户数下降 + 主力环比上升 = 筹码在向机构集中；户数上升 + 主力环比下降 = 筹码在向散户扩散。';
   }
 }
 
