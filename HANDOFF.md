@@ -59,7 +59,11 @@ python3 scripts/update_calendar.py --verify-only      # 只校验不写盘
 # ④ 语法自检（无浏览器环境的最低保障）
 #    抽出 <script> 内容 → node --check
 
-# ⑤ 服务器上「立即刷新」接口（页面「刷新」按钮打的就是它）
+# ⑤ 自选账号（没有邮箱找回，忘了密码只能本机重置）
+python3 scripts/reset_user.py --list
+python3 scripts/reset_user.py --user 你的用户名 --password 新密码
+
+# ⑥ 服务器上「立即刷新」接口（页面「刷新」按钮打的就是它）
 curl -s https://xiaosanlab.online/api/refresh                      # GET：只报状态，不触发
 curl -s -X POST -H 'Origin: https://xiaosanlab.online' \
      https://xiaosanlab.online/api/refresh                          # POST：真的抓一次（约 21–30 秒）
@@ -93,7 +97,9 @@ curl -sk https://127.0.0.1/retail-radar.html -H 'Host: xiaosanlab.online' -o /de
 | 抓数 cron | 6 行，**只在交易时段**：`9:10–11:30 / 13:00–15:20`，周一至周五，共 30 次/天 |
 | cron 日志 | **`/tmp/radar_cron.log`**（不在项目目录里） |
 | Python | `/usr/bin/python3` = 3.12.3，已装 `requests` 2.31.0 |
-| 「立即刷新」接口 | `retail-radar-api.service`（systemd）跑 `scripts/refresh_api.py`，**只监听 `127.0.0.1:8081`**，由 nginx `location = /api/refresh` 反代 |
+| API 服务 | `retail-radar-api.service`（systemd）跑 **`scripts/api_server.py`**，**只监听 `127.0.0.1:8081`**，由 nginx 反代：`location = /api/refresh`（长超时 220s）+ `location /api/`（普通接口 30s） |
+| API 端点 | `GET/POST /api/refresh`（触发抓数）；`POST /api/auth/register\|login\|logout`；`GET/PUT /api/watchlist`（自选账号同步，需 `Authorization: Bearer <token>`） |
+| 自选账号存储 | `data/users.json`（**0600**，密码 PBKDF2-HMAC-SHA256 20 万次 + 随机盐，不存明文）。忘了密码用 **`python3 scripts/reset_user.py --user 名字 --password 新密码`**（`--list` 看账号、`--delete` 删账号） |
 | 接口限流参数 | 环境变量可调：`REFRESH_MIN_INTERVAL`(120s) / `REFRESH_MAX_PER_HOUR`(10) / `REFRESH_TIMEOUT`(180s) / `REFRESH_ALLOW_ORIGINS` |
 | 接口口令（可选加固） | 写 `data/.refresh_token`（`chmod 600`）后，请求必须带 `X-Refresh-Token`；不写就是"公开但严格限流" |
 | ⚠️ 已停用的遗留服务 | `retail-radar.service`（`python3 -m http.server 8080`）—— **曾是公网可达的裸 HTTP 目录服务**（能读到 `.git/`、`data/` 等），已 `disable --now`。**别重新启用** |

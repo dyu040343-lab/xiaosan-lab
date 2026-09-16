@@ -1420,6 +1420,20 @@ button:focus-visible,.tab:focus-visible,.subtab:focus-visible {outline:3px solid
 }
 .stock-panel .wide-box { max-height: 62vh; }
 .sp-btn.primary { border-color: var(--accent-dim); color: var(--accent); }
+.sp-account {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 14px; border-bottom: 1px solid var(--border);
+  font-size: 11px; color: var(--dim);
+  font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+.sp-account b { color: var(--text-hi); }
+.sp-account input {
+  height: 26px; padding: 0 9px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-1); color: var(--text); font-size: 11px; outline: none;
+  font-family: inherit;
+}
+.sp-account input:focus { border-color: var(--accent-dim); }
+.sp-account .wl-dim { color: var(--dimmer); }
 @media (max-width: 760px) {
   .stock-panel { max-height: 70vh; }
   .stock-panel .wide-box { max-height: 56vh; }
@@ -1460,6 +1474,7 @@ button:focus-visible,.tab:focus-visible,.subtab:focus-visible {outline:3px solid
       <span class="sp-actions" id="spActions"></span>
       <span class="sp-close" onclick="clearQuick()">✕</span>
     </div>
+    <div class="sp-account" id="spAccount" hidden></div>
     <div class="table-box wide-box">
       <table>
         <thead id="spHead"></thead>
@@ -2272,20 +2287,23 @@ function loadWatchlist() {
 }
 function saveWatchlist() {
   try { localStorage.setItem(WL_KEY, JSON.stringify(watchlist)); } catch (e) {}
-  syncWatchUrl();          // 自选一变就把地址栏同步成"带自选的链接"
+  scheduleWlPush();        // 登录状态下把改动同步到账号（去抖，失败静默重试）
 }
 
-/* ── 自选「跟着链接走」─────────────────────────────────────────────
-   localStorage 是**按网址隔离**的（域名 / www / http / https / 裸 IP 各存各的），
-   换设备、换浏览器、清缓存、换网址入口都会丢 —— 2026-09-16 真丢过一次：
-   入口从「裸 IP:8080」换成域名，origin 变了，自选整份"消失"。
-   所以把自选同时编码进网址：`?w=600519,000001`
-     · 打开带参数的链接 → 自动合并进本机自选
-     · 自选一变 → 自动写回地址栏（replaceState，不留历史、不重载）
-     · 收藏这个地址 = 保存自选；「复制链接」可发到手机/备忘录
-   ⚠️ 链接里含你的代码列表，会进浏览器历史与服务器访问日志，分享前留意。 */
+/* ── 自选怎么保存：两个方案，用户自己选 ─────────────────────────────
+   ① 本机（默认）：只写 localStorage，不碰地址栏、不上传任何数据。
+      代价：localStorage **按网址隔离**（域名/www/http/https/裸 IP 各存各的），
+      换设备、换浏览器、清缓存、换入口地址都会丢 → 用「导出代码/导入」搬家兜底。
+   ② 账号（可选）：注册/登录后自选存服务端 data/users.json，任何设备登录同一账号即同步。
+      代价：需要注册；**没有邮箱找回**，密码忘了只能重新注册（或本机跑 scripts/reset_user.py）。
+   `?w=` 参数只保留「一次性搬运」用途（例如从旧地址搬过来），落地后立刻从地址栏抹掉。
+   ───────────────────────────────────────────────────────────────── */
 const WATCH_PARAM = 'w';
-const WATCH_URL_MAX = 300;      // 超过就不写进网址（避免超长 URL），请用「导出」文本兜底
+const WL_ACCT_KEY = 'xiaosan_watch_account_v1';
+const WL_PUSH_DEBOUNCE_MS = 1500;
+let wlAccount = null;        // {user, token}
+let wlFormOpen = false;
+let wlPushTimer = null;
 
 function watchCodesFromUrl() {
   try {
@@ -2300,20 +2318,7 @@ function watchCodesFromUrl() {
   } catch (e) { return []; }
 }
 
-function syncWatchUrl() {
-  try {
-    if (!history.replaceState) return;
-    const url = new URL(location.href);
-    if (watchlist.length && watchlist.length <= WATCH_URL_MAX) {
-      url.searchParams.set(WATCH_PARAM, watchlist.join(','));
-    } else {
-      url.searchParams.delete(WATCH_PARAM);
-    }
-    history.replaceState(null, '', url.pathname + url.search + url.hash);
-  } catch (e) {}
-}
-
-// 打开带 ?w= 的链接 → 并集合并（本机已有的在前，新增的追加在后）
+// 一次性搬运：并集合并（本机已有的在前，新增的追加在后）
 function importWatchFromUrl() {
   const codes = watchCodesFromUrl();
   if (!codes.length) return 0;
@@ -2324,23 +2329,139 @@ function importWatchFromUrl() {
   return added;
 }
 
-// 当前自选的"可带走链接"（去掉旧的 w 参数后重新拼）
-function watchShareLink() {
-  let base = location.origin + location.pathname;
+// 搬完就把 ?w= 从地址栏抹掉 —— 自选不该长期挂在网址上
+function cleanWatchParamFromUrl() {
   try {
+    if (!history.replaceState) return;
     const u = new URL(location.href);
-    base = u.origin + u.pathname;
+    if (!u.searchParams.has(WATCH_PARAM)) return;
+    u.searchParams.delete(WATCH_PARAM);
+    const q = u.searchParams.toString();
+    history.replaceState(null, '', u.pathname + (q ? '?' + q : '') + u.hash);
   } catch (e) {}
-  return base + '?' + WATCH_PARAM + '=' + watchlist.join(',');
 }
 
-function copyWatchLink() {
-  if (!watchlist.length) { toast('自选为空，先点 ☆ 添加'); return; }
-  const msg = '已复制带自选的链接（' + watchlist.length + ' 只）· 存到备忘录或手机上，打开即恢复';
-  const link = watchShareLink();
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(link).then(() => toast(msg)).catch(() => fallbackCopy(link, msg));
-  } else fallbackCopy(link, msg);
+/* ── 账号（可选）── */
+function loadAccount() {
+  try {
+    const v = JSON.parse(localStorage.getItem(WL_ACCT_KEY) || 'null');
+    wlAccount = (v && v.token && v.user) ? v : null;
+  } catch (e) { wlAccount = null; }
+}
+function saveAccount() {
+  try {
+    if (wlAccount) localStorage.setItem(WL_ACCT_KEY, JSON.stringify(wlAccount));
+    else localStorage.removeItem(WL_ACCT_KEY);
+  } catch (e) {}
+}
+async function wlApi(path, method, body) {
+  const headers = { 'Accept': 'application/json' };
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (wlAccount && wlAccount.token) headers['Authorization'] = 'Bearer ' + wlAccount.token;
+  try {
+    const r = await fetch('/api' + path, {
+      method: method || 'GET', cache: 'no-store', headers: headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    let j = null;
+    try { j = await r.json(); } catch (e) { j = null; }
+    return { http: r.status, body: j };
+  } catch (e) { return { http: 0, body: null }; }
+}
+// 登录状态下，自选一变就去抖推上去
+function scheduleWlPush() {
+  if (!wlAccount) return;
+  if (wlPushTimer) clearTimeout(wlPushTimer);
+  wlPushTimer = setTimeout(() => { wlPushTimer = null; wlPush(true); }, WL_PUSH_DEBOUNCE_MS);
+}
+async function wlPush(silent) {
+  if (!wlAccount) return false;
+  const res = await wlApi('/watchlist', 'PUT', { codes: watchlist });
+  if (res.http === 401) { wlAuthLost(); return false; }
+  if (!res.body || !res.body.ok) {
+    if (!silent) toast(res.http === 0 ? '连不上服务器，稍后再试' : '同步失败，稍后会自动重试');
+    return false;
+  }
+  if (!silent) toast('已同步 ' + (res.body.codes || []).length + ' 只到账号 ' + wlAccount.user);
+  return true;
+}
+// 两边并集：本机 + 云端都不丢，然后把合并结果推回去
+async function wlSync(silent) {
+  if (!wlAccount) return;
+  const res = await wlApi('/watchlist', 'GET');
+  if (res.http === 401) { wlAuthLost(); return; }
+  if (!res.body || !res.body.ok) {
+    if (!silent) toast(res.http === 0 ? '连不上服务器，稍后再试' : '读取云端自选失败');
+    return;
+  }
+  const server = (res.body.codes || []).filter(c => /^\d{6}$/.test(c));
+  loadWatchlist();
+  const before = watchlist.length;
+  let added = 0;
+  for (const c of server) if (watchlist.indexOf(c) < 0) { watchlist.push(c); added++; }
+  if (added) saveWatchlist();
+  await wlPush(true);
+  updateWatchCount();
+  syncStars();
+  if (panelMode === 'watch') openWatchPanel();
+  if (!silent) toast(added ? ('已合并：本机 ' + before + ' 只 + 云端新增 ' + added + ' 只')
+                           : ('已是最新，共 ' + watchlist.length + ' 只'));
+}
+function wlAuthLost() {
+  wlAccount = null; saveAccount(); renderAccountBar();
+  toast('登录已失效，请重新登录（本机自选不受影响）');
+}
+function wlOpenForm() { wlFormOpen = true; renderAccountBar(); const el = document.getElementById('wlUser'); if (el) el.focus(); }
+function wlCloseForm() { wlFormOpen = false; renderAccountBar(); }
+async function wlSubmit(mode) {
+  const uEl = document.getElementById('wlUser'), pEl = document.getElementById('wlPass');
+  const u = (uEl && uEl.value || '').trim(), pw = (pEl && pEl.value || '');
+  if (!u || !pw) { toast('请填用户名和密码'); return; }
+  const res = await wlApi(mode === 'register' ? '/auth/register' : '/auth/login', 'POST',
+                          { username: u, password: pw });
+  if (res.http === 0) { toast('连不上服务器，稍后再试'); return; }
+  if (!res.body || !res.body.ok) {
+    toast((res.body && res.body.message) || ('失败（HTTP ' + res.http + '）'));
+    return;
+  }
+  wlAccount = { user: res.body.user, token: res.body.token };
+  saveAccount();
+  wlFormOpen = false;
+  await wlSync(true);            // 登录后立刻把两边合并
+  renderAccountBar();
+  toast(mode === 'register' ? '账号已创建，自选开始跟随账号走' : '已登录，自选已同步');
+}
+async function wlLogout() {
+  if (!wlAccount) return;
+  await wlApi('/auth/logout', 'POST');     // 服务端作废 token；失败也不影响本机
+  wlAccount = null; saveAccount();
+  renderAccountBar();
+  toast('已退出登录 · 自选仍保存在本机');
+}
+
+// 自选面板顶部那一行：本机 / 表单 / 已登录 三态
+function renderAccountBar() {
+  const el = document.getElementById('spAccount');
+  if (!el) return;
+  if (panelMode !== 'watch') { el.hidden = true; el.innerHTML = ''; return; }
+  el.hidden = false;
+  if (wlAccount) {
+    el.innerHTML = '<span>已同步到账号 <b>' + wlAccount.user + '</b></span>'
+      + '<button class="sp-btn" onclick="wlSync(false)">立即同步</button>'
+      + '<button class="sp-btn danger" onclick="wlLogout()">退出登录</button>'
+      + '<span class="wl-dim">换设备登录同一账号即可</span>';
+  } else if (wlFormOpen) {
+    el.innerHTML = '<span>用户名</span><input id="wlUser" placeholder="3–20 位" autocomplete="username">'
+      + '<span>密码</span><input id="wlPass" type="password" placeholder="≥6 位" autocomplete="current-password">'
+      + '<button class="sp-btn primary" onclick="wlSubmit(\'register\')">创建账号</button>'
+      + '<button class="sp-btn" onclick="wlSubmit(\'login\')">登录</button>'
+      + '<button class="sp-btn" onclick="wlCloseForm()">取消</button>'
+      + '<span class="wl-dim">没有邮箱找回，忘了密码只能重新注册</span>';
+  } else {
+    el.innerHTML = '<span>自选只存在<b>这台设备</b>（换设备/清缓存会丢）</span>'
+      + '<button class="sp-btn primary" onclick="wlOpenForm()">用账号同步</button>'
+      + '<span class="wl-dim">不注册也行：用「导出代码」搬家</span>';
+  }
 }
 function isWatched(code) { return watchlist.indexOf(code) >= 0; }
 function syncStars() {
@@ -2514,9 +2635,10 @@ function openWatchPanel() {
   drawStockPanel(
     '我的自选',
     watchlist.length === 0
-      ? '点任意表格里股票名前的 ☆ 即可加入。自选只存本机（按网址隔离），用「复制链接」可带走。'
+      ? '点任意表格里股票名前的 ☆ 即可加入。默认只存本机，也可以用账号同步。'
       : '共 ' + watchlist.length + ' 只' + (missing ? '（' + missing + ' 只暂无数据）' : '')
-        + ' · 只存本机（按网址隔离）→ 用「复制链接」带走，换设备打开即恢复'
+        + (wlAccount ? ' · 已同步到账号 ' + wlAccount.user
+                     : ' · 只存本机 → 可「用账号同步」或「导出代码」搬家')
   );
   updateWatchCount();
 }
@@ -2555,8 +2677,7 @@ function drawStockPanel(title, note) {
   const noteEl = document.getElementById('spNote');
   if (noteEl) { noteEl.textContent = note || ''; noteEl.hidden = !note; }
   document.getElementById('spActions').innerHTML = (panelMode === 'watch')
-    ? '<button class="sp-btn primary" onclick="copyWatchLink()">复制链接</button>'
-      + '<button class="sp-btn" onclick="exportWatch()">导出代码</button>'
+    ? '<button class="sp-btn" onclick="exportWatch()">导出代码</button>'
       + '<button class="sp-btn" onclick="importWatch()">导入</button>'
       + '<button class="sp-btn danger" onclick="clearWatch()">清空</button>'
     : ((spRows[0] && spRows[0].code)
@@ -2569,6 +2690,7 @@ function drawStockPanel(title, note) {
       + c.label + '<span class="sort-icon"></span></th>';
   }).join('') + '</tr>';
 
+  renderAccountBar();
   const body = document.getElementById('spBody');
   if (!spRows.length) {
     body.innerHTML = '<tr><td colspan="' + SP_COLS.length + '" style="text-align:center;color:var(--dim);padding:34px;">'
@@ -2976,11 +3098,13 @@ function toggleAuto() {
   updateAutoLabel();
 }
 
-const _watchRestored = importWatchFromUrl();   // 链接里带了 ?w= 就先恢复
+const _watchRestored = importWatchFromUrl();   // ?w= 只当一次性搬运（如从旧地址迁过来）
+cleanWatchParamFromUrl();                     // 搬完立刻把参数从地址栏抹掉
 loadWatchlist();
-syncWatchUrl();                               // 保证地址栏永远是"带自选的链接"
+loadAccount();
 updateWatchCount();
-if (_watchRestored) toast('已从链接恢复 ' + _watchRestored + ' 只自选 ★');
+if (_watchRestored) toast('已从旧链接恢复 ' + _watchRestored + ' 只自选 ★');
+if (wlAccount) wlSync(true);                  // 登录状态 → 后台静默与账号同步
 fetchData();
 updateAutoLabel();
 document.getElementById('autoToggle').classList.add('on');
