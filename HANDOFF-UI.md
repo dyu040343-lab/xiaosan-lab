@@ -125,6 +125,15 @@ circ_ratio                         流通A股/总股本 %
 1. **三档守恒**：散户(小单) + 中单 + 主力(超大单+大单) 的三档净额之和 **恒等于 0**。不要试图让它们"各自独立"。
 2. **A 股配色**：涨 = 红（`--red`），跌 = 绿（`--green`），**和欧美相反**。其中「主力」档刻意用蓝色（`--blue`）以示对手盘，不是配色错误。
 3. **研究的锚点是散户**：散户段永远独立成档；主力是"对手盘"视角。不要把主力/机构变成页面主角。
+3b. **自选必须「跟着链接走」**（`?w=600519,000001`）：localStorage **按 origin 隔离**（域名/www/http/https/裸 IP 各存各的），换设备、换浏览器、清缓存、**换入口地址**都会丢 —— 2026-09-16 真丢过一次。约束：
+    - 启动时 `importWatchFromUrl()` 合并链接里的代码；`saveWatchlist()` 里必须调 `syncWatchUrl()`（**用 `replaceState`，不要 `pushState`**，否则每点一次 ☆ 都塞一条历史记录）
+    - 清空自选后要把 `w` 参数删掉（别留个空参数）
+    - 面板要有「复制链接」（`copyWatchLink()`），说明文案要讲清"只存本机 + 怎么带走"，但**保持一行以内**
+    - ⚠️ 链接里含代码列表（会进浏览器历史和服务器 access log），这是刻意的取舍，别偷偷去掉参数
+
+3c. **速查/自选面板必须是浮层**：`.tool-bar { position: relative }` + `.stock-panel { position: absolute; top: calc(100% + 8px); z-index: 60; max-height: 74vh }`。
+    它原来是文档流元素，**每敲一个字就会被结果面板顶下去**（2026-09-16 反馈"打字框动来动去"）。别再改回静态定位或加 `margin` 撑开高度。
+
 4. **Tab2（资金占比动向）的占比分母是「自由流通市值」**，不是成交额、更不是流通市值：
    `占比 = 该档净额 ÷ ff_mcap × 100`，`ff_mcap = 流通A股 × 现价 × 自由流通比例（筹码表 float_ratio）`。
    - ❌ 不许换回「成交额」（会被换手率带偏）；❌ 更不许用「流通市值」（它把锁定盘也算进分母 —— 中国石油两把尺子差 17 倍）。
@@ -193,6 +202,8 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 | `matchSearch()` / `filterTable()` / `clearListFilter()` / `updateFilterChip()` | 榜单内筛选（扫整张榜单，同时作用于图表与表格）+ 常驻筛选状态 chip |
 | `emptyStateHTML()` / `quickLookup()` / `boardForStock()` / `forceShow()` / `ensureRatio()` / `LIQUIDITY_MIN` | 空态诊断（哪条规则挡的）+ 一键动作；「口径外」显示通道 |
 | `ffMcapMap()` / `ffMcapOf()` / `ratioOf()` / `ratioTier()` / `ratioTd()` / `RATIO_BAR_FULL` | **占比口径唯一实现**：自由流通市值分母 + 条形满格基准（主力 10% / 散户 5%）。`ratioOf` 返回 `null` = 算不出分母 |
+| `watchCodesFromUrl()` / `syncWatchUrl()` / `importWatchFromUrl()` / `watchShareLink()` / `copyWatchLink()` | 自选随链接走（`?w=`）：导入、回写、复制分享链接 |
+| `drawStockPanel(title, note)` | 速查/自选共用面板。⚠️ `note` 必须显示在 `#spNote`（`hidden` 要按有无文案切换）—— 曾经这里被写成清空，等于把说明吞了 |
 | `toggleChipHelp()` | 筹码表「口径说明」折叠面板 |
 | `renderChart(stocks, field)` | 手写 SVG 条形图 |
 | `renderTable(stocks, field)` | 榜单表格（8 列，含 ☆） |

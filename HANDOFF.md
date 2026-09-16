@@ -96,7 +96,8 @@ curl -sk https://127.0.0.1/retail-radar.html -H 'Host: xiaosanlab.online' -o /de
 | 「立即刷新」接口 | `retail-radar-api.service`（systemd）跑 `scripts/refresh_api.py`，**只监听 `127.0.0.1:8081`**，由 nginx `location = /api/refresh` 反代 |
 | 接口限流参数 | 环境变量可调：`REFRESH_MIN_INTERVAL`(120s) / `REFRESH_MAX_PER_HOUR`(10) / `REFRESH_TIMEOUT`(180s) / `REFRESH_ALLOW_ORIGINS` |
 | 接口口令（可选加固） | 写 `data/.refresh_token`（`chmod 600`）后，请求必须带 `X-Refresh-Token`；不写就是"公开但严格限流" |
-| ⚠️ 已停用的遗留服务 | `retail-radar.service`（`python3 -m http.server 8080`）—— **曾是公网可达的裸 HTTP 目录服务**（能读到 `.git/`、`data/` 等），已 `disable --now`。**别重新启用**（nginx 已覆盖 80/443 的全部需求） |
+| ⚠️ 已停用的遗留服务 | `retail-radar.service`（`python3 -m http.server 8080`）—— **曾是公网可达的裸 HTTP 目录服务**（能读到 `.git/`、`data/` 等），已 `disable --now`。**别重新启用** |
+| 8080（现在的用途） | 由 nginx vhost **`migrate-8080`**（root `/var/www/migrate`，只有 `migrate.html` 一个文件）提供：**任何路径都返回这个「把自选带到新站」的迁移页，不映射任何项目文件**。存在的意义是"老书签（旧 origin）还能读到旧 localStorage 里的自选" |
 
 ---
 
@@ -125,7 +126,11 @@ curl -sk https://127.0.0.1/retail-radar.html -H 'Host: xiaosanlab.online' -o /de
 7. **cron 的时段和脚本里的闸门是两套**：cron 管"什么时候跑"，`fetch_data.py` 里的 `in_trading_window()` 管"该不该跑"（双保险）。
 8. **东财接口有 IP 限流**：主接口 `push2` 偶发 502 时会自动降级到 `push2delay` 镜像（分 60 页抓，慢但能成），别把降级逻辑删了。
 9. **`/api/refresh` 的限流不能放宽**：它替用户立刻跑一次 `fetch_data.py`（约 21–30 秒、要打 60 页东财接口）。无节制触发会被东财按 IP 限流，**反过来把正常的数据管道一起弄坏**。要改就改环境变量，别去注释掉判定。
-10. **别用 `python3 -m http.server` 对外提供服务**：它没有鉴权、会把整个目录（含 `.git/`、`data/`）明文暴露。2026-09-16 就是这样挂了一个公网可达的 8080，已关闭。真要对外，走 nginx。
+10. **别用 `python3 -m http.server` 对外提供服务**：它没有鉴权、会把整个目录（含 `.git/`、`data/`）明文暴露。2026-09-16 就是这样挂了一个公网可达的 8080，已关闭。真要对外，走 nginx（8080 现在就是 nginx 在管，且只发一个迁移页）。
+11. 🩸 **下线任何入口前，先看真实流量再动手，并且必须把"新地址"显著告诉 owner**：
+    `journalctl -u <服务>` / nginx access log 一看就知道有没有人在用。2026-09-16 关掉 8080 时没做这两件事，
+    结果 owner 的书签就指在那里（当天访问了 199 次），直接被挡在门外 —— **而且 localStorage 按 origin 隔离，
+    换地址 = 自选"凭空消失"**。教训：改入口 = 要迁移数据 + 要通知人。
 
 ---
 
