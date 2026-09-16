@@ -1601,6 +1601,7 @@ async function fetchData() {
     const resp = await fetch('data/radar_data.json?t=' + Date.now());
     allData = await resp.json();
     _universe = null;   // 数据刷新后重建「全市场指标索引」
+    _ffMcap = null;     // 同时重建占比分母表（自由流通市值）
     render();
   } catch(e) {
     document.getElementById('statusText').textContent = '加载失败';
@@ -1676,19 +1677,19 @@ function getBaseList() {
       stocks = stocks.filter(s => (s[pf]||0) > 0); break;
     case 'netout': case 'medium_netout': case 'main_netout':
       stocks = stocks.filter(s => (s[pf]||0) < 0); break;
-    // 资金占比动向：TOP 只看正值，BOTTOM 只看负值，避免榜单跨过零轴。
+    // 资金占比动向：占比 = 净额 ÷ 自由流通市值；TOP 只取正、BOTTOM 只取负，避免榜单跨零轴。
+    // 没有筹码数据（算不出分母）的票直接不参与排名。
     case 'retail_ratio_top':
     case 'retail_ratio_bottom':
-      stocks.forEach(s => s._ratio = s.dynamic_ratio || 0);
-      stocks = stocks.filter(s => currentSub === 'retail_ratio_top' ? s._ratio > 0 : s._ratio < 0);
+      stocks.forEach(s => s._ratio = ratioOf(s, 'retail'));
+      stocks = stocks.filter(s => s._ratio !== null
+        && (currentSub === 'retail_ratio_top' ? s._ratio > 0 : s._ratio < 0));
       break;
     case 'main_ratio_top':
     case 'main_ratio_bottom':
-      stocks.forEach(s => {
-        const amt = s.total_amount || 0;
-        s._ratio = amt > 0.01 ? (s.main_net || 0) / amt * 100 : 0;
-      });
-      stocks = stocks.filter(s => currentSub === 'main_ratio_top' ? s._ratio > 0 : s._ratio < 0);
+      stocks.forEach(s => s._ratio = ratioOf(s, 'main'));
+      stocks = stocks.filter(s => s._ratio !== null
+        && (currentSub === 'main_ratio_top' ? s._ratio > 0 : s._ratio < 0));
       break;
   }
   // 占比 tab：流动性过滤（剔除成交额 < 门槛的票，阈值见 LIQUIDITY_MIN）
@@ -1717,10 +1718,10 @@ function chartTitleFor() {
   switch (currentSub) {
     case 'net': case 'medium_net': case 'main_net': return n + '净流入 TOP30';
     case 'netout': case 'medium_netout': case 'main_netout': return n + '净流出 TOP30';
-    case 'retail_ratio_top': return '散户占比TOP30（占比最正 = 散户净买入最强，剔除成交<5亿）';
-    case 'retail_ratio_bottom': return '散户占比BOTTOM30（占比最负 = 散户净卖出最强）';
-    case 'main_ratio_top': return '主力占比TOP30（占比最正 = 主力净买入最强）';
-    case 'main_ratio_bottom': return '主力占比BOTTOM30（占比最负 = 主力净卖出最强）';
+    case 'retail_ratio_top': return '散户占比TOP30（散户净额 ÷ 自由流通市值，最正 = 散户净买入最强；样本：成交额 ≥5 亿）';
+    case 'retail_ratio_bottom': return '散户占比BOTTOM30（最负 = 散户净卖出最强）';
+    case 'main_ratio_top': return '主力占比TOP30（主力净额 ÷ 自由流通市值，最正 = 主力净买入最强）';
+    case 'main_ratio_bottom': return '主力占比BOTTOM30（最负 = 主力净卖出最强）';
   }
   return 'TOP30';
 }
@@ -1772,7 +1773,7 @@ function renderChart(stocks, primaryField) {
   let metric, maxVal;
   if (currentTab === 'dynamic') {
     metric = '_ratio';
-    maxVal = 100;
+    maxVal = RATIO_FULL();      // 条形满格基准（固定值，见 RATIO_BAR_FULL）
   } else {
     metric = primaryField;
     maxVal = Math.max(...stocks.map(s => Math.abs(s[metric] || 0)), 0.01);
@@ -1783,8 +1784,8 @@ function renderChart(stocks, primaryField) {
     let displayVal, valColor, barColor;
     if (currentTab === 'dynamic') {
       displayVal = (val >= 0 ? '+' : '') + val.toFixed(2) + '%';
-      valColor = isRetailSide ? 'var(--purple)' : 'var(--blue)';
-      barColor = isRetailSide ? 'purple' : 'blue';
+      valColor = val < 0 ? 'var(--green)' : (isRetailSide ? 'var(--purple)' : 'var(--blue)');
+      barColor = val < 0 ? 'green' : (isRetailSide ? 'purple' : 'blue');
     } else if (currentFlow === 'main') {
       // 主力视角：蓝涨绿跌（区分散户/中单视角）
       displayVal = (val >= 0 ? '+' : '') + val.toFixed(2) + '亿';
@@ -1796,13 +1797,23 @@ function renderChart(stocks, primaryField) {
       valColor = val >= 0 ? 'var(--red)' : 'var(--green)';
       barColor = val >= 0 ? (currentFlow === 'medium' ? 'cyan' : 'red') : 'green';
     }
-    const pct = currentTab === 'dynamic' ? Math.min(Math.abs(val), 100) : (Math.abs(val) / maxVal * 100);
+    const pct = Math.min(Math.abs(val) / maxVal * 100, 100);
     html += '<div class="bar-item">' +
       '<div class="bar-info"><span class="bar-name">' + s.name + '</span><span class="bar-value" style="color:' + valColor + '">' + displayVal + '</span></div>' +
       '<div class="bar-track"><div class="bar-fill ' + barColor + '" style="width:' + pct + '%"></div></div>' +
     '</div>';
   }
   document.getElementById('chartArea').innerHTML = html;
+}
+
+// 占比单元格：占比 = 净额 ÷ 自由流通市值，条形按固定满格基准缩放（算不出分母显示 --）
+function ratioTd(s) {
+  const v = s._ratio;
+  if (v === null || v === undefined) return '<td style="color:var(--dim)">--</td>';
+  const col = v < 0 ? 'var(--green)' : (ratioTier() === 'main' ? 'var(--blue)' : 'var(--purple)');
+  const w = Math.min(Math.abs(v) / RATIO_FULL() * 100, 100);
+  return '<td><div class="ratio-cell"><span style="color:' + col + ';font-weight:600">' + v.toFixed(2) + '%</span>'
+    + '<span class="mini-bar"><span class="mini-fill" style="width:' + w + '%;background:' + col + '"></span></span></div></td>';
 }
 
 function renderTable(stocks, primaryField, offScope) {
@@ -1816,7 +1827,10 @@ function renderTable(stocks, primaryField, offScope) {
     {key: 'retail_net', label: '散户净额'},
     {key: 'medium_net', label: '中单净额'},
     {key: 'main_net', label: '主力净额'},
-    {key: 'dynamic_ratio', label: '动态占比'},
+    {key: '_ratio', label: IS_MAIN_SIDE() ? '主力占比' : '散户占比',
+     tip: (IS_MAIN_SIDE() ? '主力净额' : '散户净额') + ' ÷ 自由流通市值 × 100%。'
+        + '分母 = 流通A股 × 现价 × 自由流通比例（不用流通市值，那会把锁定盘也算进分母）；'
+        + '约 7% 没有筹码数据的股票显示 --'},
     {key: 'sector', label: '行业'},
   ] : [
     // 资金动向 tab：不含动态占比列，表格更清爽
@@ -1836,7 +1850,8 @@ function renderTable(stocks, primaryField, offScope) {
     let cls = 'sortable';
     if (sortCol === c.key) cls += sortAsc ? ' sort-asc' : ' sort-desc';
     else cls += ' sort-none';
-    return '<th class="' + cls + '" onclick="sortTable(\'' + c.key + '\')">' + c.label + '<span class="sort-icon"></span></th>';
+    return '<th class="' + cls + '"' + (c.tip ? ' title="' + c.tip + '"' : '')
+         + ' onclick="sortTable(\'' + c.key + '\')">' + c.label + '<span class="sort-icon"></span></th>';
   }).join('') + '</tr>';
 
   let bodyHtml = '';
@@ -1855,8 +1870,7 @@ function renderTable(stocks, primaryField, offScope) {
       '<td' + isHL('retail_net') + ' style="color:' + (r >= 0 ? 'var(--red)' : 'var(--green)') + ';font-weight:600">' + (r >= 0 ? '+' : '') + r.toFixed(2) + '</td>' +
       '<td' + isHL('medium_net') + ' style="color:' + (m >= 0 ? 'var(--red)' : 'var(--green)') + ';font-weight:600">' + (m >= 0 ? '+' : '') + m.toFixed(2) + '</td>' +
       '<td' + isHL('main_net') + ' style="color:' + mainColor + '">' + (mn >= 0 ? '+' : '') + mn.toFixed(2) + '</td>' +
-      (isDynamic ? '<td><div class="ratio-cell"><span style="color:' + ((s.dynamic_ratio||0) > 0 ? 'var(--purple)' : 'var(--blue)') + ';font-weight:600">' + (s.dynamic_ratio||0).toFixed(1) + '%</span>' +
-        '<span class="mini-bar"><span class="mini-fill" style="width:' + Math.min(Math.abs(s.dynamic_ratio||0), 100) + '%;background:' + ((s.dynamic_ratio||0) > 0 ? 'var(--purple)' : 'var(--blue)') + '"></span></span></div></td>' : '') +
+      (isDynamic ? ratioTd(s) : '') +
       '<td><span class="tag">' + s.sector + '</span></td>' +
     '</tr>';
   }
@@ -1915,7 +1929,20 @@ function yi(v, color) {
   return '<span style="color:' + color + '">' + (x > 0 ? '+' : '') + x.toFixed(2) + ' 亿</span>';
 }
 // 这只票在本 tab 的「哪个 subtab」里？用来给「切过去」按钮
+function subLabel(key) {
+  const arr = (currentTab === 'dynamic') ? DYNAMIC_SUBTABS : FLOW_SUBTABS[currentFlow];
+  const f = (arr || []).filter(x => x.key === key)[0];
+  return f ? f.label : key;
+}
 function boardForStock(s) {
+  // 占比 tab：占比的符号 = 净额的符号（分母恒正），所以方向不一致时能直接指出该去哪张榜
+  if (currentTab === 'dynamic') {
+    const isMain = IS_MAIN_SIDE();
+    const v = isMain ? (s.main_net || 0) : (s.retail_net || 0);
+    const k = isMain ? (v >= 0 ? 'main_ratio_top' : 'main_ratio_bottom')
+                     : (v >= 0 ? 'retail_ratio_top' : 'retail_ratio_bottom');
+    return { key: k, label: subLabel(k) };
+  }
   if (currentTab !== 'flow') return null;
   const subs = FLOW_SUBTABS[currentFlow];
   const v = s[PRIMARY_FIELD()] || 0;
@@ -1923,18 +1950,49 @@ function boardForStock(s) {
 }
 // 占比 tab 的流动性门槛（与 getBaseList 里保持一致）
 const LIQUIDITY_MIN = 5;
+
+/* ── 占比的分母：自由流通市值 ──────────────────────────────────
+   占比 = 该档净额 ÷ 自由流通市值 × 100
+   自由流通市值 = 流通A股 × 现价 × 自由流通比例（筹码表的 float_ratio）
+   ⚠️ 分母不能用「流通市值」——它把锁定盘也算进去，中国石油两者差 17 倍。
+   ⚠️ 约 7% 的票没有筹码数据（新股 / 未披露十大流通股东）→ 算不出分母，
+      不进占比榜、单元格显示 --，空态会解释原因。
+   ─────────────────────────────────────────────────────────── */
+let _ffMcap = null;                       // code -> 自由流通市值（亿元）
+function ffMcapMap() {
+  if (_ffMcap) return _ffMcap;
+  const fr = new Map();
+  for (const r of (allData?.holder_chip?.chip_flow?.rows || [])) {
+    if (r.float_ratio > 0) fr.set(r.code, r.float_ratio);
+  }
+  _ffMcap = new Map();
+  for (const s of (allData?.retail_flow || [])) {
+    const ratio = fr.get(s.code);
+    const cs = s.circ_shares || 0, pr = s.price || 0;
+    if (ratio && cs > 0 && pr > 0) _ffMcap.set(s.code, cs / 1e8 * pr * ratio / 100);
+  }
+  return _ffMcap;
+}
+function ffMcapOf(s) {
+  const v = ffMcapMap().get(s.code);
+  return (v > 0) ? v : null;
+}
+function ratioOf(s, tier) {               // tier: 'main' | 'retail'
+  const m = ffMcapOf(s);
+  if (m === null) return null;
+  return (tier === 'main' ? (s.main_net || 0) : (s.retail_net || 0)) / m * 100;
+}
+function ratioTier() { return IS_MAIN_SIDE() ? 'main' : 'retail'; }
+// 条形满格基准（固定值 → 四个榜单横向可比）
+const RATIO_BAR_FULL = { main: 10, retail: 5 };
+function RATIO_FULL() { return RATIO_BAR_FULL[ratioTier()]; }
 function forceShow(code) {
   if (forceCodes.indexOf(code) < 0) forceCodes.push(code);
   renderView();
   updateFilterChip();
 }
 function ensureRatio(s) {
-  if (currentSub === 'main_ratio_top' || currentSub === 'main_ratio_bottom') {
-    const amt = s.total_amount || 0;
-    s._ratio = amt > 0.01 ? (s.main_net || 0) / amt * 100 : 0;
-  } else {
-    s._ratio = s.dynamic_ratio || 0;
-  }
+  s._ratio = ratioOf(s, IS_MAIN_SIDE() ? 'main' : 'retail');
 }
 function emptyStateHTML() {
   if (!searchText) return '<div class="empty-tip">当前榜单暂无数据</div>';
@@ -1949,17 +2007,26 @@ function emptyStateHTML() {
   const lookupBtn = '<button class="empty-btn primary" onclick="quickLookup(\'' + s.code + '\')">看它全部指标</button>';
   const clearBtn = '<button class="empty-btn" onclick="clearListFilter()">清除筛选</button>';
 
-  // ① 占比榜：被「成交额 ≥5 亿」门槛筛掉（这是唯一的排除原因，榜单本身不分方向）
+  // ① 算不出分母：没有筹码数据（新股 / 未披露十大流通股东）
+  if (currentTab === 'dynamic' && ffMcapOf(s) === null) {
+    return '<div class="empty-tip">'
+      + '当前榜单里没有 ' + name + '<br>'
+      + '占比的分母是<b>自由流通市值</b>，需要这只票的筹码数据，它现在没有 —— 算不出占比<br>'
+      + clearBtn + lookupBtn
+      + '</div>';
+  }
+  // ② 占比榜：被「成交额 ≥5 亿」门槛筛掉（榜单本身不分方向，这是唯一的排除原因）
   if (currentTab === 'dynamic' && (s.total_amount || 0) < LIQUIDITY_MIN) {
+    const r = ratioOf(s, ratioTier());
     return '<div class="empty-tip">'
       + '当前榜单里没有 ' + name + '<br>'
       + '占比榜只收录成交额 ≥ ' + LIQUIDITY_MIN + ' 亿的股票，它今天只有 <b>' + (s.total_amount || 0).toFixed(2)
-      + ' 亿</b>（占比 ' + (s.dynamic_ratio || 0).toFixed(1) + '%）—— 成交额太小，占比会被放大成噪声<br>'
+      + ' 亿</b>' + (r === null ? '' : '（' + (IS_MAIN_SIDE() ? '主力' : '散户') + '占比 ' + r.toFixed(2) + '%）') + '<br>'
       + '<button class="empty-btn" onclick="forceShow(\'' + s.code + '\')">仍然显示它（口径外）</button>'
       + clearBtn + lookupBtn
       + '</div>';
   }
-  // ② 资金动向：方向不对（这张榜只看单边）
+  // ③ 方向不对（资金动向 / 占比榜都只看单边）
   const board = boardForStock(s);
   if (board) {
     return '<div class="empty-tip">'
@@ -1967,6 +2034,9 @@ function emptyStateHTML() {
       + '它现在是 散户 ' + yi(s.retail_net, (s.retail_net || 0) > 0 ? 'var(--red)' : 'var(--green)')
       + ' · 中单 ' + yi(s.medium_net, (s.medium_net || 0) > 0 ? 'var(--red)' : 'var(--green)')
       + ' · 主力 ' + yi(s.main_net, (s.main_net || 0) > 0 ? 'var(--blue)' : 'var(--green)')
+      + (currentTab === 'dynamic'
+          ? '<br>换算成占比是 ' + (ratioOf(s, ratioTier()) === null ? '--' : ratioOf(s, ratioTier()).toFixed(2) + '%')
+          : '')
       + '<br>本榜单只看单边方向，它在「' + board.label + '」里<br>'
       + '<button class="empty-btn" onclick="switchSub(\'' + board.key + '\')">切到「' + board.label + '」看它</button>'
       + clearBtn + lookupBtn
@@ -2111,11 +2181,12 @@ const SP_COLS = [
   {key:'price',        label:'价格'},
   {key:'change_pct',   label:'涨跌'},
   {key:'total_amount', label:'成交额', tip:'当日成交额（亿元）'},
+  {key:'ff_mcap',      label:'自由流通市值', tip:'流通A股 × 现价 × 自由流通比例（亿元）。占比榜的分母 —— 用它而不是流通市值，因为锁定盘不参与日常博弈'},
   {key:'retail_net',   label:'散户净额', tip:'小单净额（亿元）。散户（小单）净买入为正'},
   {key:'medium_net',   label:'中单净额', tip:'中单净额（亿元）'},
   {key:'main_net',     label:'主力净额', tip:'超大单 + 大单净额（亿元）'},
-  {key:'retail_ratio', label:'散户占比', tip:'散户净额 ÷ 成交额 × 100%。正 = 散户净买入；成交额过小时该值噪声很大'},
-  {key:'main_ratio',   label:'主力占比', tip:'主力净额 ÷ 成交额 × 100%。正 = 主力净买入，与散户占比方向互斥'},
+  {key:'retail_ratio', label:'散户占比', tip:'散户净额 ÷ 自由流通市值 × 100%（分母 = 流通A股 × 现价 × 自由流通比例，即「自由流通市值」列）。正 = 散户净买入；缺筹码数据的票显示 --'},
+  {key:'main_ratio',   label:'主力占比', tip:'主力净额 ÷ 自由流通市值 × 100%。正 = 主力净买入，与散户占比方向互斥'},
   {key:'lock_ratio',   label:'锁定盘', tip:'A股里被大股东锁住、不参与日常博弈的筹码占比 = 100% − 自由流通。越高越说明股价由锁仓方主导'},
   {key:'float_ratio',  label:'自由流通', tip:'自由流通A股 ÷ 流通A股。剔除不动的筹码后，真正会动、可博弈的比例'},
   {key:'retail_ff',    label:'散户持股', tip:'散户及其他持股 ÷ 自由流通'},
@@ -2226,10 +2297,9 @@ function universe() {
   if (_universe) return _universe;
   const map = new Map();
   for (const s of (allData?.retail_flow || [])) {
-    const amt = s.total_amount || 0;
     map.set(s.code, Object.assign({}, s, {
-      retail_ratio: (s.dynamic_ratio === undefined || s.dynamic_ratio === null) ? null : s.dynamic_ratio,
-      main_ratio: amt > 0.01 ? (s.main_net || 0) / amt * 100 : null,
+      ff_mcap: null,
+      retail_ratio: null, main_ratio: null,
       lock_ratio: null, float_ratio: null,
       retail_ff: null, inst_ff: null, legal_ff: null,
       holders: null, holder_chg: null, inst_delta: null,
@@ -2240,6 +2310,14 @@ function universe() {
     o.name = o.name || r.name;
     o.lock_ratio = r.lock_ratio;
     o.float_ratio = r.float_ratio;
+    // 占比 = 净额 ÷ 自由流通市值（与榜单同一口径）
+    if (r.float_ratio > 0 && o.circ_shares > 0 && o.price > 0) {
+      o.ff_mcap = o.circ_shares / 1e8 * o.price * r.float_ratio / 100;
+      if (o.ff_mcap > 0) {
+        o.retail_ratio = (o.retail_net || 0) / o.ff_mcap * 100;
+        o.main_ratio = (o.main_net || 0) / o.ff_mcap * 100;
+      }
+    }
     o.retail_ff = r.retail_ff;
     o.inst_ff = r.inst_ff;
     o.legal_ff = r.legal_ff;
@@ -2388,9 +2466,9 @@ function drawStockPanel(title, note) {
 
 const F2 = v => (v > 0 ? '+' : '') + v.toFixed(2);
 const NULLISH = v => (v === null || v === undefined || (typeof v === 'number' && isNaN(v)));
-const pctCell = (v, color) => NULLISH(v)
+const pctCell = (v, color, dp) => NULLISH(v)
   ? '<td style="color:var(--dim)">--</td>'
-  : '<td style="color:' + color + '">' + v.toFixed(2) + '%</td>';
+  : '<td style="color:' + color + '">' + v.toFixed(dp === undefined ? 2 : dp) + '%</td>';
 
 function spCell(s, key) {
   switch (key) {
@@ -2422,9 +2500,11 @@ function spCell(s, key) {
       return '<td style="color:' + c + ';font-weight:600">' + F2(v) + '</td>';
     }
     case 'retail_ratio':
-      return pctCell(s.retail_ratio, (s.retail_ratio || 0) >= 0 ? 'var(--purple)' : 'var(--green)');
+      return pctCell(s.retail_ratio, (s.retail_ratio || 0) >= 0 ? 'var(--purple)' : 'var(--green)', 3);
     case 'main_ratio':
-      return pctCell(s.main_ratio, (s.main_ratio || 0) >= 0 ? 'var(--blue)' : 'var(--green)');
+      return pctCell(s.main_ratio, (s.main_ratio || 0) >= 0 ? 'var(--blue)' : 'var(--green)', 3);
+    case 'ff_mcap':
+      return '<td style="color:var(--dim)">' + (NULLISH(s.ff_mcap) ? '--' : s.ff_mcap.toFixed(1)) + '</td>';
     case 'lock_ratio':
       return NULLISH(s.lock_ratio) ? '<td style="color:var(--dim)">--</td>'
         : '<td style="font-weight:500">' + s.lock_ratio.toFixed(1) + '%</td>';

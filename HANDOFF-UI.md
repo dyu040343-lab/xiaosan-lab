@@ -80,8 +80,10 @@ retail_net  小单净额(亿)   ← 「散户」
 medium_net  中单净额(亿)   ← 「中单」
 main_net    超大单+大单净额(亿) ← 「主力」
 super_net large_net small_net super_pct large_pct medium_pct small_pct
-total_amount  成交额(亿)   ← 占比维度分母；流动性过滤用它
-dynamic_ratio = retail_net / total_amount × 100   ← 「散户占比」
+total_amount  成交额(亿)   ← 流动性过滤用它（不再做占比分母）
+dynamic_ratio = retail_net / total_amount × 100   ← ⚠️ 旧口径，前端已不再使用（字段保留在 JSON 里）
+circ_shares / total_shares  流通A股 / 总股本（股）；配合现价与筹码表 float_ratio 算「自由流通市值」
+⚠️ 占比的分母由前端算：ff_mcap = circ_shares/1e8 × price × float_ratio/100（亿元）
 total_shares circ_shares  （总股本 / 流通A股，股）
 ```
 > `main_ratio` 前端现算：`main_net / total_amount × 100`。
@@ -123,7 +125,12 @@ circ_ratio                         流通A股/总股本 %
 1. **三档守恒**：散户(小单) + 中单 + 主力(超大单+大单) 的三档净额之和 **恒等于 0**。不要试图让它们"各自独立"。
 2. **A 股配色**：涨 = 红（`--red`），跌 = 绿（`--green`），**和欧美相反**。其中「主力」档刻意用蓝色（`--blue`）以示对手盘，不是配色错误。
 3. **研究的锚点是散户**：散户段永远独立成档；主力是"对手盘"视角。不要把主力/机构变成页面主角。
-4. **Tab2（资金占比动向）必须用占比维度**（`dynamic_ratio` / `main_ratio`），且**必须保留流动性过滤 `total_amount >= 5`（亿）**，否则会出现"成交 140 万 / 净额 102 万 = +73%"这种伪占比霸榜。
+4. **Tab2（资金占比动向）的占比分母是「自由流通市值」**，不是成交额、更不是流通市值：
+   `占比 = 该档净额 ÷ ff_mcap × 100`，`ff_mcap = 流通A股 × 现价 × 自由流通比例（筹码表 float_ratio）`。
+   - ❌ 不许换回「成交额」（会被换手率带偏）；❌ 更不许用「流通市值」（它把锁定盘也算进分母 —— 中国石油两把尺子差 17 倍）。
+   - 口径只在 `ratioOf(s, tier)` 一处定义，四个榜单、表格占比列、速查面板必须都走它。
+   - **必须保留流动性过滤 `total_amount >= LIQUIDITY_MIN`(5 亿)**（样本口径，用户 2026-09-16 未要求改）。
+   - **没有筹码数据的票（约 7%）算不出分母** → 不进榜、单元格 `--`、空态必须解释。
 5. **`PRIMARY_FIELD()` 在占比 tab 恒返回 `retail_net`**：占比列的橙色高亮只属于「资金动向」tab，别"顺手统一"。
 6. **BOTTOM 榜单必须是负值**（对齐净流出），不要搞成"最小正值"。
 7. **筹码表口径**：`锁定盘 = 100 − 自由流通`（A 股视角）。`holder_chg === null` 表示该股股东户数是按月披露、与季频窗口不可比 → 必须显示 `--` **并沉底，不能当 0**。
@@ -141,6 +148,7 @@ circ_ratio                         流通A股/总股本 %
     - 榜单表只**展示** TOP30，但榜单内筛选（`matchSearch`）扫的是**整张榜单**（如散户净流入 2960 只），所以第 329 名也搜得到 —— 这是刻意设计，别把筛选改成"只在显示的 30 行里找"。
     - 当一只票**在市场上存在、但被本榜单的口径挡在门外**时（占比榜的成交额 ≥ `LIQUIDITY_MIN`=5 亿门槛 / 资金动向榜的单边方向），空态必须**说清是哪条规则挡的**，并给出对应动作：占比榜 →「仍然显示它（口径外）」(`forceShow`，行上打 `.off-scope` 标、标题注明"含口径外 N 只")；方向不符 →「切到「净流入TOP」看它」(`boardForStock` 算目标 subtab)。
     - 流动性门槛只认 `LIQUIDITY_MIN` 这一个常量（`getBaseList` 与空态解释都用它），别新增第二处硬编码 5。
+    - 占比 tab 的空态还有第三种：**没有筹码数据 → 算不出自由流通市值**，必须说清是"缺筹码数据"而不是"没这只票"。
     - 切换 tab / subtab / 改搜索词都要清空 `forceCodes`（口径外标记只对当次搜索有效）。
 
 ---
@@ -173,6 +181,7 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 | `getBaseList()` / `applyDefaultSort()` / `renderView()` | 榜单：filter / 设排序 / 渲染 |
 | `matchSearch()` / `filterTable()` / `clearListFilter()` / `updateFilterChip()` | 榜单内筛选（扫整张榜单，同时作用于图表与表格）+ 常驻筛选状态 chip |
 | `emptyStateHTML()` / `quickLookup()` / `boardForStock()` / `forceShow()` / `ensureRatio()` / `LIQUIDITY_MIN` | 空态诊断（哪条规则挡的）+ 一键动作；「口径外」显示通道 |
+| `ffMcapMap()` / `ffMcapOf()` / `ratioOf()` / `ratioTier()` / `ratioTd()` / `RATIO_BAR_FULL` | **占比口径唯一实现**：自由流通市值分母 + 条形满格基准（主力 10% / 散户 5%）。`ratioOf` 返回 `null` = 算不出分母 |
 | `toggleChipHelp()` | 筹码表「口径说明」折叠面板 |
 | `renderChart(stocks, field)` | 手写 SVG 条形图 |
 | `renderTable(stocks, field)` | 榜单表格（8 列，含 ☆） |
@@ -220,7 +229,7 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 2. 本地 `python3 -m http.server` 打开：4 张 KPI 卡、图表、榜单表、筹码表、速查、自选全部正常。
 3. 逐个切 tab / subtab / 点表头排序，无报错（F12 console 干净）。
 4. 缩小到 375px 宽看一遍，没有横向溢出把整页撑破。
-5. **业务回归**：占比 tab 的榜单仍只含成交额 ≥ 5 亿的票；筹码表"户数变化"为空的行仍在最底部显示 `--`；点 ☆ 不跳滚动位置。
+5. **业务回归**：占比 tab 的榜单仍只含成交额 ≥ 5 亿的票、且榜首与"净额 ÷ 自由流通市值"独立算出的结果一致；筹码表"户数变化"为空的行仍在最底部显示 `--`；点 ☆ 不跳滚动位置。
 6. **日历回归**：把 `data/trading_calendar.json` 临时改名 → 页面仍能正常加载（退回只看工作日）；再放回来 → 休市日（如 2026-09-25）在控制台里 `isTradingNow(new Date(2026,8,25,10,0))` 应返回 `false`。
 7. **AUTO 标签**：交易时段 `AUTO 60s`、收盘后 `已收盘 · 暂停`、周末 `休市 · 周末`、节假日在工作日位置 `休市 · 节假日`。
 
@@ -245,7 +254,7 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 
 硬性要求（也写在 HANDOFF-UI.md 第 1、5 节）：
 - 不要引入任何框架或构建工具，保持单文件、原生 JS/CSS。
-- 不要改业务口径、过滤条件、排序逻辑（尤其是占比 tab 的成交额 ≥5 亿过滤、筹码表户数变化空值显示 -- 并沉底、只渲染前 30 行）。
+- 不要改业务口径、过滤条件、排序逻辑（尤其是占比的分母 = 自由流通市值、占比 tab 的成交额 ≥5 亿过滤、筹码表户数变化空值显示 -- 并沉底、只渲染前 30 行）。
 - 不要动 data/ 目录。
 - 改完自己跑一遍第 9 节的验收清单，并给我一份改动说明。
 ```
