@@ -131,8 +131,11 @@ circ_ratio                         流通A股/总股本 %
     - 面板顶部必须有 `#spAccount` 那一行（三态：本机 / 注册登录表单 / 已登录），`renderAccountBar()` 渲染；文案要写清"没有邮箱找回"。
     - `?w=` 只当**一次性搬运**（例如从旧地址迁过来）：`importWatchFromUrl()` 合并后必须 `cleanWatchParamFromUrl()` 把它从地址栏抹掉。
 
-3c. **速查/自选面板必须是浮层**：`.tool-bar { position: relative }` + `.stock-panel { position: absolute; top: calc(100% + 8px); z-index: 60; max-height: 74vh }`。
-    它原来是文档流元素，**每敲一个字就会被结果面板顶下去**（2026-09-16 反馈"打字框动来动去"）。别再改回静态定位或加 `margin` 撑开高度。
+3c. **速查/自选面板必须是「`.tool-bar` 的子元素 + 绝对定位」**（两件事缺一不可）：
+    - CSS：`.tool-bar { position: relative }` + `.stock-panel { position: absolute; top: calc(100% + 8px); z-index: 60; max-height: 74vh }`
+    - DOM：`#stockPanel` **必须写在 `.tool-bar` 内部**。⚠️ 2026-09-16 踩过：只加了 CSS、面板还是工具条的**兄弟节点** → 最近的定位祖先变成 `body`，`top: calc(100% + 8px)` 按 body 高度算，**结果面板被甩到页面底部**，和输入框离得老远。
+    - 它原本是文档流元素，**每敲一个字就被结果面板顶下去**（"打字框动来动去"）；改成静态定位或`margin` 撑高会退回这个毛病。
+    - 改完请跑结构断言：面板必须在 `.tool-bar` 的 div 配对范围内，且在 `#quickInput` 之后。
 
 4. **Tab2（资金占比动向）的占比分母是「自由流通市值」**，不是成交额、更不是流通市值：
    `占比 = 该档净额 ÷ ff_mcap × 100`，`ff_mcap = 流通A股 × 现价 × 自由流通比例（筹码表 float_ratio）`。
