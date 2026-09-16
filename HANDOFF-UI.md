@@ -142,6 +142,13 @@ circ_ratio                         流通A股/总股本 %
 11. **自选每次改动前先 `loadWatchlist()` 读盘**（多标签页防覆盖，别优化掉）。
 12. **排序解耦**：`getBaseList()` 只做 filter，`applyDefaultSort()` 只设排序键与方向，`renderView()` 才真正渲染。别合并。
 13. **休市判断必须走日历**：不要把节假日硬编码进前端（周末判定除外），也不要因为日历加载失败就把刷新关掉 —— 缺日历时的正确行为是**退回「只看工作日」**（宁可多刷一次）。`isMarketClosed()` / `isHoliday()` 的返回值语义别改。
+    - ⚠️ `isMarketClosed(d)` 判的是**「今天休不休市」**（周末/节假日），**不是「此刻收没收盘」**；要判断"现在能不能取数"用 `isTradingNow(d)`。混用会算出"今天不存在的时刻"（踩过）。
+
+16. **数据节奏 ≠ 轮询节奏，界面只能显示数据节奏**：服务器每 10 分钟重新抓一版（crontab），页面为了尽快拿到新版每 60 秒问一次 —— 但**别把 60s 写进界面**（旧版 `AUTO 60s` 会让人误以为数据 1 分钟一更）。对外只说「数据时间 X · 10 分钟一更」（`dataTimeLabel` / `DATA_INTERVAL_MIN`）。
+
+17. **拉数据必须走条件请求，不要加 `?t=` 防缓存**：整份 JSON 原始 6.87MB / gzip **1.29MB**，加时间戳会让每次轮询都完整重下（≈77MB/小时/标签页）。正确写法 `fetch('data/radar_data.json', { cache: 'no-cache' })` —— 服务器已有 `ETag` / `Last-Modified`，数据没变时回 **304、0 字节**。只在条件请求整体失败时才退回时间戳 URL 兜底（见 `loadData()`）。
+
+18. **手动刷新必须有反馈**：数据没换版是**正常现象**（10 分钟才一版），不能让用户面对一个"点了没反应"的按钮。`manualRefresh()` 要给出：「服务器数据仍是 14:30 那一版 · 每 10 分钟更新一次，下一版约 14:40」/ 换版时「已更新到 14:40 那一版」/ 失败时「刷新失败」。跨版本时数据时间要闪一下（`tickFlash`）。
 14. **榜单内的筛选会同时作用于图表和表格**（两者必须一致，别只筛表格）。筛选后为空时**不能只显示"暂无数据"**：`emptyStateHTML()` 必须继续告诉用户"这个词有没有这只票、它现在三档净额是多少、下一步点哪里"。`filter-chip`（筛选中 · 命中 N 只 + ✕）是让筛选状态常驻可见的，别删。
 15. **筹码表的说明文案必须保持一行速读**：详细口径收在 `口径说明` 折叠面板里（`chipHelpOpen` 记忆展开状态，别每次渲染都重置）。不要把这些文字再摊回页面上。
 16. **「搜索范围」与「榜单口径」是两件事，别混成一件**：
@@ -166,9 +173,9 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 
 ### 页面区块（`<body>` 内）
 ```
-.header                      顶栏：状态徽章 / 更新时间 / 刷新按钮 / AUTO 开关
+.header                      顶栏：状态徽章 / 数据时间（数据时间 xx:xx:xx · 10 分钟一更）/ 刷新按钮 / 自动刷新开关
 .tool-bar                    个股速查输入框 + ★ 自选按钮
-.stock-panel (#stockPanel)   速查/自选 共用的「全指标表」面板（19 列）
+.stock-panel (#stockPanel)   速查/自选 共用的「全指标表」面板（20 列）
 #realtime                    KPI 4 卡 + tab 栏 + subtab + 搜索框 + 图表 + 表格
 #chipBox / 筹码区             筹码动向可排序表（9 列）
 .compliance-footer           免责声明 / 页脚
@@ -177,7 +184,8 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 ### 关键 JS 函数
 | 函数 | 职责 |
 |---|---|
-| `fetchData()` / `render()` | 拉数据 → 渲染全部区块；数据刷新后会 `_universe = null` 重建索引 |
+| `loadData()` / `fetchData()` / `render()` | 拉数据 → 渲染全部区块；数据刷新后会 `_universe = null`、`_ffMcap = null` 重建索引 |
+| `manualRefresh()` / `dataTimeLabel()` / `nextUpdateHint()` / `tickFlash()` / `DATA_INTERVAL_MIN` | 手动刷新反馈 + 「数据时间 · 10 分钟一更」文案 + 换版闪烁。**别删**（详见禁令 16–18） |
 | `getBaseList()` / `applyDefaultSort()` / `renderView()` | 榜单：filter / 设排序 / 渲染 |
 | `matchSearch()` / `filterTable()` / `clearListFilter()` / `updateFilterChip()` | 榜单内筛选（扫整张榜单，同时作用于图表与表格）+ 常驻筛选状态 chip |
 | `emptyStateHTML()` / `quickLookup()` / `boardForStock()` / `forceShow()` / `ensureRatio()` / `LIQUIDITY_MIN` | 空态诊断（哪条规则挡的）+ 一键动作；「口径外」显示通道 |
@@ -191,7 +199,7 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 | `onQuickInput()` / `drawStockPanel()` / `spCell()` / `spSort()` | 个股速查面板 |
 | `loadWatchlist() / saveWatchlist() / toggleWatch() / starBtn() / syncStars() / exportWatch() / importWatch() / clearWatch()` | 自选股（localStorage：`xiaosan_watchlist_v1`） |
 | `isWeekend()` / `isHoliday()` / `isMarketClosed()` / `isTradingNow()` / `loadCalendar()` | 交易日历判定（周末 + 法定节假日），决定刷新节奏与 AUTO 标签 |
-| `getRefreshInterval()` / `scheduleAutoRefresh()` / `toggleAuto()` | 刷新节奏：交易时段 60s；休市/非交易时段**暂停**（只留 5 分钟看门狗等开盘） |
+| `getRefreshInterval()` / `scheduleAutoRefresh()` / `toggleAuto()` | 页面自己的**轮询**节奏：交易时段 60s；休市/非交易时段**暂停**（只留 5 分钟看门狗等开盘）。⚠️ 轮询节奏 ≠ 数据节奏 |
 
 ---
 
@@ -212,8 +220,8 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 
 ## 8. 已知可优化点（方向建议，供参考）
 
-- **移动端**：断点只有 `max-width: 768px` 一个，8–19 列表格在手机上只能横向硬滚；可考虑卡片式/分组折叠。
-- **19 列速查面板**：横向滚动时缺少列分组视觉提示（行情/资金/筹码三块），容易看错列。
+- **移动端**：断点只有 `max-width: 768px` 一个，8–20 列表格在手机上只能横向硬滚；可考虑卡片式/分组折叠。
+- **20 列速查面板**：横向滚动时缺少列分组视觉提示（行情/资金/筹码三块），容易看错列。
 - **数字对齐**：金额/百分比列建议统一右对齐 + 等宽字体，便于纵向比大小。
 - **视觉层级**：KPI 卡 / 图表 / 表格三层信息密度接近，主次可再拉开（字号、留白、分隔）。
 - **可访问性**：列头口径说明只用了 `title`（移动端和键盘用户看不到）；sticky 表头没有 `aria-sort`。
@@ -231,7 +239,8 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 4. 缩小到 375px 宽看一遍，没有横向溢出把整页撑破。
 5. **业务回归**：占比 tab 的榜单仍只含成交额 ≥ 5 亿的票、且榜首与"净额 ÷ 自由流通市值"独立算出的结果一致；筹码表"户数变化"为空的行仍在最底部显示 `--`；点 ☆ 不跳滚动位置。
 6. **日历回归**：把 `data/trading_calendar.json` 临时改名 → 页面仍能正常加载（退回只看工作日）；再放回来 → 休市日（如 2026-09-25）在控制台里 `isTradingNow(new Date(2026,8,25,10,0))` 应返回 `false`。
-7. **AUTO 标签**：交易时段 `AUTO 60s`、收盘后 `已收盘 · 暂停`、周末 `休市 · 周末`、节假日在工作日位置 `休市 · 节假日`。
+7. **自动刷新标签**：交易时段 `自动刷新`、收盘后 `已收盘 · 暂停`、周末 `休市 · 周末`、节假日 `休市 · 节假日`、用户关掉 `自动刷新 · 关`；旁边必须能读到「数据时间 xx:xx:xx · 10 分钟一更」。
+8. **手动刷新回归**：数据没换版时点刷新 → 出现"仍是 xx:xx 那一版 · 每 10 分钟更新一次"；跨版本时点刷新 → 数据时间闪一下、提示"已更新到 xx:xx"。
 
 **交付要求：**
 - 只改 `retail-radar.html`（如必须动其他文件，先说明原因）。

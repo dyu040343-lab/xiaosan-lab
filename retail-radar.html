@@ -223,6 +223,24 @@ body::after {
   box-shadow: 0 0 12px rgba(245,185,66,0.1);
 }
 
+.btn-refresh:disabled {
+  opacity: 0.55;
+  cursor: default;
+  border-color: var(--border-hi);
+  color: var(--dim);
+  box-shadow: none;
+}
+
+/* 数据真的换了一版时闪一下 —— 否则「点了刷新没反应」会被当成 bug */
+@keyframes tickFlash {
+  from { background: rgba(180,83,9,0.20); }
+  to   { background: transparent; }
+}
+.update-time.flash {
+  animation: tickFlash 1.4s ease;
+  border-radius: 4px;
+}
+
 .toggle {
   display: flex;
   align-items: center;
@@ -1402,9 +1420,9 @@ button:focus-visible,.tab:focus-visible,.subtab:focus-visible {outline:3px solid
       <div class="status-badge" id="statusBadge">
         <span class="status-dot"></span><span id="statusText">加载中</span>
       </div>
-      <span class="update-time" id="updateTime">--:--</span>
-      <button class="btn-refresh" onclick="fetchData()">刷新</button>
-      <div class="toggle"><span>AUTO 60s</span>
+      <span class="update-time" id="updateTime" title="服务器生成这份数据的时间，不是页面刷新时间。数据每 10 分钟重新抓取一次（交易日 9:10–15:20）">--:--</span>
+      <button class="btn-refresh" id="btnRefresh" onclick="manualRefresh()">刷新</button>
+      <div class="toggle"><span>自动刷新</span>
         <div class="toggle-switch" id="autoToggle" onclick="toggleAuto()"></div>
       </div>
     </div>
@@ -1596,15 +1614,33 @@ const STATUS_MAP = {
   static: { cls: 'status-static', text: '估算数据' },
 };
 
+/* 取数据：默认走「条件请求」——服务器数据没变时回 304、0 字节。
+   ⚠️ 不要加 `?t=` + Date.now() 防缓存：那会让每次轮询都完整重下整份 JSON
+   （gzip 后 1.29MB，每分钟一次 ≈ 77MB/小时），而数据其实 10 分钟才变一版。
+   极少数代理不处理条件请求时，退回时间戳 URL 兜底（慢但能拿到数据）。*/
+async function loadData() {
+  const url = 'data/radar_data.json';
+  try {
+    const r = await fetch(url, { cache: 'no-cache' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } catch (e) {
+    const r2 = await fetch(url + '?t=' + Date.now());
+    if (!r2.ok) throw new Error('HTTP ' + r2.status);
+    return await r2.json();
+  }
+}
+
 async function fetchData() {
   try {
-    const resp = await fetch('data/radar_data.json?t=' + Date.now());
-    allData = await resp.json();
+    allData = await loadData();
     _universe = null;   // 数据刷新后重建「全市场指标索引」
     _ffMcap = null;     // 同时重建占比分母表（自由流通市值）
     render();
+    return true;
   } catch(e) {
     document.getElementById('statusText').textContent = '加载失败';
+    return false;
   }
 }
 
@@ -1616,7 +1652,9 @@ function render() {
   const badge = document.getElementById('statusBadge');
   badge.className = 'status-badge ' + status.cls;
   document.getElementById('statusText').textContent = status.text;
-  document.getElementById('updateTime').textContent = allData.last_updated || '--:--';
+  const stampEl = document.getElementById('updateTime');
+  stampEl.textContent = dataTimeLabel(allData.last_updated);
+  tickFlash(stampEl, allData.last_updated);
 
   const net = ov.net_amount || 0;
   document.getElementById('kpiNetAmount').textContent = (net >= 0 ? '+' : '') + net.toFixed(2) + '亿';
@@ -2692,14 +2730,71 @@ function getRefreshInterval() {
   return isTradingNow() ? 60000 : 0;   // 0 = 暂停自动刷新
 }
 
+/* ⚠️ 开关标签只描述「页面会不会自己去取」，不再写轮询间隔（如 AUTO 60s）——
+   那会让人以为数据 1 分钟一更，实际服务器 10 分钟才重新抓一次。
+   数据的真实节奏写在数据时间旁边（见 dataTimeLabel）。*/
 function updateAutoLabel() {
   const el = document.querySelector('.toggle span');
   if (!el) return;
-  if (!autoEnabled) { el.textContent = 'AUTO 已关闭'; return; }
   const now = new Date();
+  if (!autoEnabled) { el.textContent = '自动刷新 · 关'; return; }
   if (isWeekend(now)) { el.textContent = '休市 · 周末'; return; }
   if (isHoliday(now)) { el.textContent = '休市 · 节假日'; return; }
-  el.textContent = getRefreshInterval() ? 'AUTO ' + (getRefreshInterval() / 1000) + 's' : '已收盘 · 暂停';
+  el.textContent = getRefreshInterval() ? '自动刷新' : '已收盘 · 暂停';
+}
+
+// 服务器每 DATA_INTERVAL_MIN 分钟重新抓一版（与 crontab 一致）
+const DATA_INTERVAL_MIN = 10;
+// 显示的是「数据生成时间」，不是页面刷新时间
+function dataTimeLabel(t) {
+  return '数据时间 ' + (t || '--:--') + ' · ' + DATA_INTERVAL_MIN + ' 分钟一更';
+}
+function hhmmStr(t) { return String(t || '').slice(11, 16) || '--:--'; }
+/* 下一版数据大约什么时候到。
+   ⚠️ isMarketClosed 判的是「今天休不休市」（周末/节假日），不是「此刻收没收盘」，
+   所以这里必须再按时间点分段，否则收盘后会算出一个今天不存在的时刻。
+   crontab：交易日 9:10–11:30 / 13:00–15:20，整 10 分写入。*/
+function nextUpdateHint(now) {
+  now = now || new Date();
+  if (isMarketClosed(now)) return '下一个交易日开盘后';        // 周末 / 法定节假日
+  const m = now.getHours() * 60 + now.getMinutes();
+  if (m >= 15 * 60 + 20) return '下一个交易日开盘后';          // 已收盘
+  if (m < 9 * 60 + 10) return '09:10 前后';                    // 开盘前
+  if (m > 11 * 60 + 30 && m < 13 * 60) return '13:00 前后';    // 午间休市
+  const d = new Date(now.getTime());
+  d.setMinutes(now.getMinutes() + (DATA_INTERVAL_MIN - (now.getMinutes() % DATA_INTERVAL_MIN)), 30, 0);
+  return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2) + ' 前后';
+}
+
+// 数据换了一版 → 时间标签闪一下（跨版本才算，首次加载不闪）
+let _shownUpdate = null;
+function tickFlash(el, stamp) {
+  if (!el || !stamp) return;
+  if (_shownUpdate !== null && stamp !== _shownUpdate) {
+    el.classList.remove('flash');
+    void el.offsetWidth;                 // 强制重排，让动画能重复触发
+    el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 1500);
+  }
+  _shownUpdate = stamp;
+}
+
+/* 手动刷新：必须给出反馈 —— 数据没换版时要说清「服务器还是那一版，10 分钟才更新一次」，
+   否则用户会以为按钮坏了（2026-09-16 反馈）。*/
+async function manualRefresh() {
+  const btn = document.getElementById('btnRefresh');
+  const before = (allData && allData.last_updated) || null;
+  if (btn) { btn.disabled = true; btn.textContent = '刷新中'; }
+  const okFlag = await fetchData();
+  if (btn) { btn.disabled = false; btn.textContent = '刷新'; }
+  if (!okFlag) { toast('刷新失败，请稍后再试'); return; }
+  const after = (allData && allData.last_updated) || null;
+  if (after && after === before) {
+    toast('服务器数据仍是 ' + hhmmStr(after) + ' 那一版 · 每 ' + DATA_INTERVAL_MIN
+      + ' 分钟更新一次，下一版约 ' + nextUpdateHint());
+  } else {
+    toast('已更新到 ' + hhmmStr(after) + ' 那一版');
+  }
 }
 
 function scheduleAutoRefresh() {
