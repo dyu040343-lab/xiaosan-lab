@@ -146,6 +146,8 @@ circ_ratio                         流通A股/总股本 %
 
 16. **数据节奏 ≠ 轮询节奏，界面只能显示数据节奏**：服务器每 10 分钟重新抓一版（crontab），页面为了尽快拿到新版每 60 秒问一次 —— 但**别把 60s 写进界面**（旧版 `AUTO 60s` 会让人误以为数据 1 分钟一更）。对外只说「数据时间 X · 10 分钟一更」（`dataTimeLabel` / `DATA_INTERVAL_MIN`）。
 
+16b. **「刷新」按钮 = 我要最新的一版**，三段式（`manualRefresh()`）：① 先普通拉（304，快）→ ② 还是同一版且处于交易时段 → `POST /api/refresh` 让服务器**立刻重抓** → ③ 抓完再拉一次。非交易时段**不发触发请求**（数据本来不会变）。服务端会拒（403/409/429/504），**必须原样转述它的 message**；接口不通（404/405/502/503/网络异常）要退回"暂时无法触发服务器抓取 · 数据仍是 xx"，**不要把 HTTP 码甩给用户**。
+
 17. **拉数据必须走条件请求，不要加 `?t=` 防缓存**：整份 JSON 原始 6.87MB / gzip **1.29MB**，加时间戳会让每次轮询都完整重下（≈77MB/小时/标签页）。正确写法 `fetch('data/radar_data.json', { cache: 'no-cache' })` —— 服务器已有 `ETag` / `Last-Modified`，数据没变时回 **304、0 字节**。只在条件请求整体失败时才退回时间戳 URL 兜底（见 `loadData()`）。
 
 18. **手动刷新必须有反馈**：数据没换版是**正常现象**（10 分钟才一版），不能让用户面对一个"点了没反应"的按钮。`manualRefresh()` 要给出：「服务器数据仍是 14:30 那一版 · 每 10 分钟更新一次，下一版约 14:40」/ 换版时「已更新到 14:40 那一版」/ 失败时「刷新失败」。跨版本时数据时间要闪一下（`tickFlash`）。
@@ -185,7 +187,8 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 | 函数 | 职责 |
 |---|---|
 | `loadData()` / `fetchData()` / `render()` | 拉数据 → 渲染全部区块；数据刷新后会 `_universe = null`、`_ffMcap = null` 重建索引 |
-| `manualRefresh()` / `dataTimeLabel()` / `nextUpdateHint()` / `tickFlash()` / `DATA_INTERVAL_MIN` | 手动刷新反馈 + 「数据时间 · 10 分钟一更」文案 + 换版闪烁。**别删**（详见禁令 16–18） |
+| `manualRefresh()` / `triggerServerRefresh()` / `REFRESH_API` / `REFRESH_TIMEOUT_MS` | 「刷新」按钮的三段式：拉 → 让服务器抓（`POST /api/refresh`）→ 再拉。**别改成一味报错**（详见禁令 16b） |
+| `dataTimeLabel()` / `nextUpdateHint()` / `tickFlash()` / `DATA_INTERVAL_MIN` | 「数据时间 · 10 分钟一更」文案 + 下一版时间提示 + 换版闪烁。**别删**（详见禁令 16–18） |
 | `getBaseList()` / `applyDefaultSort()` / `renderView()` | 榜单：filter / 设排序 / 渲染 |
 | `matchSearch()` / `filterTable()` / `clearListFilter()` / `updateFilterChip()` | 榜单内筛选（扫整张榜单，同时作用于图表与表格）+ 常驻筛选状态 chip |
 | `emptyStateHTML()` / `quickLookup()` / `boardForStock()` / `forceShow()` / `ensureRatio()` / `LIQUIDITY_MIN` | 空态诊断（哪条规则挡的）+ 一键动作；「口径外」显示通道 |

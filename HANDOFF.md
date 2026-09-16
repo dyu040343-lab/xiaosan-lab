@@ -58,6 +58,14 @@ python3 scripts/update_calendar.py --verify-only      # 只校验不写盘
 
 # ④ 语法自检（无浏览器环境的最低保障）
 #    抽出 <script> 内容 → node --check
+
+# ⑤ 服务器上「立即刷新」接口（页面「刷新」按钮打的就是它）
+curl -s https://xiaosanlab.online/api/refresh                      # GET：只报状态，不触发
+curl -s -X POST -H 'Origin: https://xiaosanlab.online' \
+     https://xiaosanlab.online/api/refresh                          # POST：真的抓一次（约 21–30 秒）
+#    限制：单飞 + 两次间隔 ≥120s + 每小时 ≤10 次 + 仅交易时段
+#    看日志：journalctl -u retail-radar-api -n 50 --no-pager
+#    重启：sudo systemctl restart retail-radar-api
 ```
 
 **部署（目前是 SFTP 直传，不是 git）：**
@@ -85,7 +93,10 @@ curl -sk https://127.0.0.1/retail-radar.html -H 'Host: xiaosanlab.online' -o /de
 | 抓数 cron | 6 行，**只在交易时段**：`9:10–11:30 / 13:00–15:20`，周一至周五，共 30 次/天 |
 | cron 日志 | **`/tmp/radar_cron.log`**（不在项目目录里） |
 | Python | `/usr/bin/python3` = 3.12.3，已装 `requests` 2.31.0 |
-| 遗留服务 | `retail-radar.service`（systemd）在跑 `python3 -m http.server 8080`，**已无用可停用**（nginx 走 80/443） |
+| 「立即刷新」接口 | `retail-radar-api.service`（systemd）跑 `scripts/refresh_api.py`，**只监听 `127.0.0.1:8081`**，由 nginx `location = /api/refresh` 反代 |
+| 接口限流参数 | 环境变量可调：`REFRESH_MIN_INTERVAL`(120s) / `REFRESH_MAX_PER_HOUR`(10) / `REFRESH_TIMEOUT`(180s) / `REFRESH_ALLOW_ORIGINS` |
+| 接口口令（可选加固） | 写 `data/.refresh_token`（`chmod 600`）后，请求必须带 `X-Refresh-Token`；不写就是"公开但严格限流" |
+| ⚠️ 已停用的遗留服务 | `retail-radar.service`（`python3 -m http.server 8080`）—— **曾是公网可达的裸 HTTP 目录服务**（能读到 `.git/`、`data/` 等），已 `disable --now`。**别重新启用**（nginx 已覆盖 80/443 的全部需求） |
 
 ---
 
@@ -113,6 +124,8 @@ curl -sk https://127.0.0.1/retail-radar.html -H 'Host: xiaosanlab.online' -o /de
 6. **「搜索范围」≠「榜单口径」**：榜单表只展示 TOP30，但筛选扫的是整张榜单（几千只）—— 这是刻意的，别"优化"成只搜显示的 30 行。
 7. **cron 的时段和脚本里的闸门是两套**：cron 管"什么时候跑"，`fetch_data.py` 里的 `in_trading_window()` 管"该不该跑"（双保险）。
 8. **东财接口有 IP 限流**：主接口 `push2` 偶发 502 时会自动降级到 `push2delay` 镜像（分 60 页抓，慢但能成），别把降级逻辑删了。
+9. **`/api/refresh` 的限流不能放宽**：它替用户立刻跑一次 `fetch_data.py`（约 21–30 秒、要打 60 页东财接口）。无节制触发会被东财按 IP 限流，**反过来把正常的数据管道一起弄坏**。要改就改环境变量，别去注释掉判定。
+10. **别用 `python3 -m http.server` 对外提供服务**：它没有鉴权、会把整个目录（含 `.git/`、`data/`）明文暴露。2026-09-16 就是这样挂了一个公网可达的 8080，已关闭。真要对外，走 nginx。
 
 ---
 
@@ -121,6 +134,8 @@ curl -sk https://127.0.0.1/retail-radar.html -H 'Host: xiaosanlab.online' -o /de
 - 服务器登录密码、DNSPod API Token 曾在聊天记录里出现过 → **建议轮换**，并改用 SSH key 登录（关掉密码登录）。
 - 本仓库是**公开**的，所以任何密码 / Token / 私钥都不要提交进来。
 - 部署动作建议只由 owner 执行，不要把服务器凭据交给外部 AI 工具。
+- 2026-09-16 已实测确认：暴露的 8080 目录里**没有**凭据（`.git/config` 无 token、`deploy.sh` 无密码），
+  但 `.git/` 历史与 `data/` 全量数据确实可被任意人读取 —— 这类暴露属于"能用就不该留"，已关闭。
 
 ## 8. 建议的下一步
 

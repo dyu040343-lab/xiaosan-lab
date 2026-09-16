@@ -2779,21 +2779,80 @@ function tickFlash(el, stamp) {
   _shownUpdate = stamp;
 }
 
-/* 手动刷新：必须给出反馈 —— 数据没换版时要说清「服务器还是那一版，10 分钟才更新一次」，
-   否则用户会以为按钮坏了（2026-09-16 反馈）。*/
+/* 手动刷新 = 「我要最新那一版」，三段式：
+   ① 先普通拉一次（走 304，很快）—— 服务器若已有新版，立刻拿到，不用惊动抓数
+   ② 还是同一版 + 处于交易时段 → POST /api/refresh，让服务器立刻重抓一次
+   ③ 抓完再拉一次，并把结果说清楚
+   非交易时段不触发抓取（数据本来就不会变），只说明下一版什么时候到。
+   服务端另有保护：单飞 + 冷却 + 每小时上限 + 来源校验，被拒时原样转述它的原因。*/
+const REFRESH_API = '/api/refresh';
+const REFRESH_TIMEOUT_MS = 190000;      // 单次抓取实测约 27s，留足余量
+
+async function triggerServerRefresh() {
+  const ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), REFRESH_TIMEOUT_MS) : null;
+  try {
+    const r = await fetch(REFRESH_API, {
+      method: 'POST', cache: 'no-store',
+      headers: { 'Accept': 'application/json' },
+      signal: ctl ? ctl.signal : undefined,
+    });
+    let body = null;
+    try { body = await r.json(); } catch (e) { body = null; }
+    return { http: r.status, body: body, aborted: false };
+  } catch (e) {
+    return { http: 0, body: null, aborted: !!(e && e.name === 'AbortError') };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function manualRefresh() {
   const btn = document.getElementById('btnRefresh');
+  const setBtn = (t, dis) => { if (btn) { btn.textContent = t; btn.disabled = !!dis; } };
   const before = (allData && allData.last_updated) || null;
-  if (btn) { btn.disabled = true; btn.textContent = '刷新中'; }
-  const okFlag = await fetchData();
-  if (btn) { btn.disabled = false; btn.textContent = '刷新'; }
-  if (!okFlag) { toast('刷新失败，请稍后再试'); return; }
-  const after = (allData && allData.last_updated) || null;
-  if (after && after === before) {
+
+  setBtn('刷新中', true);
+  const pulled = await fetchData();
+  if (!pulled) { setBtn('刷新', false); toast('刷新失败，请稍后再试'); return; }
+  let after = (allData && allData.last_updated) || null;
+  if (after && after !== before) {          // 服务器已经有新版了，不用惊动抓数
+    setBtn('刷新', false);
+    toast('已更新到 ' + hhmmStr(after) + ' 那一版');
+    return;
+  }
+
+  if (!isTradingNow()) {                    // 收盘/休市：数据不会变，别浪费一次抓取
+    setBtn('刷新', false);
     toast('服务器数据仍是 ' + hhmmStr(after) + ' 那一版 · 每 ' + DATA_INTERVAL_MIN
       + ' 分钟更新一次，下一版约 ' + nextUpdateHint());
+    return;
+  }
+
+  setBtn('让服务器抓取 0s', true);
+  const t0 = Date.now();
+  const tick = setInterval(() => setBtn('让服务器抓取 ' + Math.round((Date.now() - t0) / 1000) + 's', true), 1000);
+  const res = await triggerServerRefresh();
+  clearInterval(tick);
+
+  if (res.http === 200 && res.body && res.body.ok) {
+    await fetchData();                      // 抓完了 → 再取一次新版
+    after = (allData && allData.last_updated) || null;
+    setBtn('刷新', false);
+    toast(after !== before ? '服务器刚抓取完成，已更新到 ' + hhmmStr(after) + ' 那一版'
+                           : '服务器刚抓取完成，版本没变（这一分钟没有新成交）');
+    return;
+  }
+
+  setBtn('刷新', false);
+  const msg = (res.body && res.body.message) || '';
+  if (res.aborted) {
+    toast('抓取时间较长，可能仍在后台进行 · 稍后会自动显示新版');
+  } else if (res.http === 0 || res.http === 404 || res.http === 405 || res.http === 502 || res.http === 503) {
+    // 接口不通（老部署 / nginx 没配 / 网络）→ 退回原来的说法，别甩一个 HTTP 码给用户
+    toast('暂时无法触发服务器抓取 · 数据仍是 ' + hhmmStr(after) + ' 那一版，下一版约 ' + nextUpdateHint());
   } else {
-    toast('已更新到 ' + hhmmStr(after) + ' 那一版');
+    toast(msg || ('服务器拒绝了这次刷新（HTTP ' + res.http + '）'));
   }
 }
 
