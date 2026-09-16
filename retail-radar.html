@@ -223,6 +223,32 @@ body::after {
   box-shadow: 0 0 12px rgba(245,185,66,0.1);
 }
 
+.btn-account {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-hi);
+  background: var(--bg-1);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.btn-account:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 12px rgba(245,185,66,0.1);
+}
+
+/* 已登录：弱化成"就是个名字"，避免顶栏一直抢注意力 */
+.btn-account.on {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+  background: rgba(155,87,38,0.06);
+}
+
 .btn-refresh:disabled {
   opacity: 0.55;
   cursor: default;
@@ -1419,6 +1445,7 @@ button:focus-visible,.tab:focus-visible,.subtab:focus-visible {outline:3px solid
   overflow: hidden;
 }
 .stock-panel .wide-box { max-height: 62vh; }
+@media (max-width: 760px) { .btn-account { padding: 6px 10px; font-size: 11px; } }
 .sp-btn.primary { border-color: var(--accent-dim); color: var(--accent); }
 .sp-account {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -1460,6 +1487,9 @@ button:focus-visible,.tab:focus-visible,.subtab:focus-visible {outline:3px solid
       </div>
       <span class="update-time" id="updateTime" title="服务器生成这份数据的时间，不是页面刷新时间。数据每 10 分钟重新抓取一次（交易日 9:10–15:20）">--:--</span>
       <button class="btn-refresh" id="btnRefresh" onclick="manualRefresh()">刷新</button>
+      <!-- 账号入口：自选跟着账号走。放在顶栏，否则用户根本找不到注册的地方 -->
+      <button class="btn-account" id="btnAccount" onclick="openAccountPanel()"
+              title="注册/登录账号后，自选会存到服务器，换设备登录即可恢复">登录 / 注册</button>
       <div class="toggle"><span>自动刷新</span>
         <div class="toggle-switch" id="autoToggle" onclick="toggleAuto()"></div>
       </div>
@@ -2412,6 +2442,25 @@ function wlAuthLost() {
   toast('登录已失效，请重新登录（本机自选不受影响）');
 }
 function wlOpenForm() { wlFormOpen = true; renderAccountBar(); const el = document.getElementById('wlUser'); if (el) el.focus(); }
+
+/* 顶栏「登录 / 注册」按钮：直接落到账号表单上（表单就在自选面板顶部的 #spAccount 一行）。
+   没登录就展开表单并聚焦用户名；已登录就只是打开面板（账号行会显示"已同步到账号 X"）。*/
+function openAccountPanel() {
+  if (!wlAccount) wlFormOpen = true;
+  openWatchPanel();
+  const bar = document.querySelector('.tool-bar');
+  if (bar && bar.scrollIntoView) bar.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const el = document.getElementById('wlUser');
+  if (el && el.focus) setTimeout(() => { try { el.focus(); } catch (e) {} }, 120);
+}
+
+// 顶栏按钮文案跟着登录态走（未登录=登录/注册，已登录=账号·名字）
+function updateAccountBtn() {
+  const b = document.getElementById('btnAccount');
+  if (!b) return;
+  if (wlAccount) { b.textContent = '账号 · ' + wlAccount.user; b.classList.add('on'); }
+  else { b.textContent = '登录 / 注册'; b.classList.remove('on'); }
+}
 function wlCloseForm() { wlFormOpen = false; renderAccountBar(); }
 async function wlSubmit(mode) {
   const uEl = document.getElementById('wlUser'), pEl = document.getElementById('wlPass');
@@ -2441,6 +2490,7 @@ async function wlLogout() {
 
 // 自选面板顶部那一行：本机 / 表单 / 已登录 三态
 function renderAccountBar() {
+  updateAccountBtn();                       // 顶栏按钮与面板内账号行永远一致
   const el = document.getElementById('spAccount');
   if (!el) return;
   if (panelMode !== 'watch') { el.hidden = true; el.innerHTML = ''; return; }
@@ -3102,6 +3152,7 @@ const _watchRestored = importWatchFromUrl();   // ?w= 只当一次性搬运（�
 cleanWatchParamFromUrl();                     // 搬完立刻把参数从地址栏抹掉
 loadWatchlist();
 loadAccount();
+updateAccountBtn();                           // 顶栏「登录 / 注册」按钮按登录态显示
 updateWatchCount();
 if (_watchRestored) toast('已从旧链接恢复 ' + _watchRestored + ' 只自选 ★');
 if (wlAccount) wlSync(true);                  // 登录状态 → 后台静默与账号同步

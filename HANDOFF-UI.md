@@ -129,6 +129,7 @@ circ_ratio                         流通A股/总股本 %
     - **本机（默认）**：只写 `localStorage['xiaosan_watchlist_v1']`，**不许把自选写进地址栏**（`replaceState` 也不行 —— URL 里挂一串代码很难看）。代价是 localStorage 按 origin 隔离，换设备/清缓存会丢 → 靠「导出代码 / 导入」搬家。
     - **账号（可选）**：`POST /api/auth/register|login` 拿 token 存 `localStorage['xiaosan_watch_account_v1']`；`wlSync()` 做**并集合并**（本机 ∪ 云端，谁都不丢）后回写；`saveWatchlist()` 里调 `scheduleWlPush()` 做 1.5s 去抖推送；401 → `wlAuthLost()` 清登录态但**不动本机自选**。
     - 面板顶部必须有 `#spAccount` 那一行（三态：本机 / 注册登录表单 / 已登录），`renderAccountBar()` 渲染；文案要写清"没有邮箱找回"。
+    - ⚠️ **账号入口必须在顶栏有常驻按钮**（`#btnAccount`，`openAccountPanel()`）：只藏在自选面板里等于没有——用户 2026-09-16 直接问"在哪里可以让用户注册账号"。按钮文案跟登录态走（未登录 `登录 / 注册`，已登录 `账号 · 名字` + `.on` 弱化样式），`updateAccountBtn()` 由 `renderAccountBar()` 与启动序列各调一次；点它要**直接展开表单并聚焦用户名**，别让用户再点一层。
     - `?w=` 只当**一次性搬运**（例如从旧地址迁过来）：`importWatchFromUrl()` 合并后必须 `cleanWatchParamFromUrl()` 把它从地址栏抹掉。
 
 3c. **速查/自选面板必须是「`.tool-bar` 的子元素 + 绝对定位」**（两件事缺一不可）：
@@ -206,6 +207,7 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 | `emptyStateHTML()` / `quickLookup()` / `boardForStock()` / `forceShow()` / `ensureRatio()` / `LIQUIDITY_MIN` | 空态诊断（哪条规则挡的）+ 一键动作；「口径外」显示通道 |
 | `ffMcapMap()` / `ffMcapOf()` / `ratioOf()` / `ratioTier()` / `ratioTd()` / `RATIO_BAR_FULL` | **占比口径唯一实现**：自由流通市值分母 + 条形满格基准（主力 10% / 散户 5%）。`ratioOf` 返回 `null` = 算不出分母 |
 | `wlApi()` / `wlSync()` / `wlPush()` / `scheduleWlPush()` / `wlSubmit()` / `wlLogout()` / `renderAccountBar()` / `wlAuthLost()` | 自选**账号**模式（注册/登录/并集合并/去抖推送/退出），面板顶部那一行由 `renderAccountBar()` 渲染 |
+| `openAccountPanel()` / `updateAccountBtn()` | 顶栏「登录 / 注册」入口（`#btnAccount`）：一键打开面板 + 展开表单 + 聚焦；按钮文案随登录态切换 |
 | `watchCodesFromUrl()` / `importWatchFromUrl()` / `cleanWatchParamFromUrl()` | `?w=` **只做一次性搬运**：导入后立刻把参数从地址栏抹掉 |
 | `drawStockPanel(title, note)` | 速查/自选共用面板。⚠️ `note` 必须显示在 `#spNote`（`hidden` 要按有无文案切换）—— 曾经这里被写成清空，等于把说明吞了 |
 | `toggleChipHelp()` | 筹码表「口径说明」折叠面板 |
