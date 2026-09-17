@@ -888,22 +888,40 @@ td.code-cell { color: var(--dim); font-size: 10px; }
   white-space: nowrap;
 }
 
+/* 占比单元格：数字右对齐（小数点对齐）+ 迷你条
+   条形长度 = |占比| ÷ 本榜最大 → 榜首满格，排行榜从上往下递减，一眼能扫
+   ⚠️ 原来是 36×3px 的浅灰细线，在浅色卡片上几乎看不见、且所有行的条一样长
+   （固定满格 5%/10% 造成的），2026-09-17 按用户反馈重做。 */
 .ratio-cell {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 7px;
 }
 
-.mini-bar {
-  width: 36px;
-  height: 3px;
-  border-radius: 2px;
+.ratio-num {
+  min-width: 44px;
+  text-align: right;
+  font-weight: 600;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.ratio-bar {
+  flex: 0 0 58px;
+  width: 58px;
+  height: 7px;
+  border-radius: 4px;
   overflow: hidden;
   display: inline-block;
-  background: var(--bg-1);
+  background: var(--bg-2);
 }
 
-.mini-fill { height: 100%; border-radius: 2px; }
+.ratio-fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.4s cubic-bezier(.22,1,.36,1);
+}
 
 /* ═══ 自选星标 ═══ */
 .star-btn {
@@ -1825,10 +1843,11 @@ function chartTitleFor() {
   switch (currentSub) {
     case 'net': case 'medium_net': case 'main_net': return n + '净流入 TOP30';
     case 'netout': case 'medium_netout': case 'main_netout': return n + '净流出 TOP30';
-    case 'retail_ratio_top': return '散户占比TOP30（散户净额 ÷ 自由流通市值，最正 = 散户净买入最强；样本：成交额 ≥5 亿）';
-    case 'retail_ratio_bottom': return '散户占比BOTTOM30（最负 = 散户净卖出最强）';
-    case 'main_ratio_top': return '主力占比TOP30（主力净额 ÷ 自由流通市值，最正 = 主力净买入最强）';
-    case 'main_ratio_bottom': return '主力占比BOTTOM30（最负 = 主力净卖出最强）';
+    // 口径细节收进表头 tooltip 与「口径说明」，标题只留结论（标题塞一整句读起来很累）
+    case 'retail_ratio_top': return '散户占比 TOP30 · 净买入最强';
+    case 'retail_ratio_bottom': return '散户占比 BOTTOM30 · 净卖出最强';
+    case 'main_ratio_top': return '主力占比 TOP30 · 净买入最强';
+    case 'main_ratio_bottom': return '主力占比 BOTTOM30 · 净卖出最强';
   }
   return 'TOP30';
 }
@@ -1865,7 +1884,11 @@ function renderView() {
     });
   }
   const top = list.slice(0, 30);
-  document.getElementById('chartTitle').textContent = chartTitleFor() + (offScope ? '（含口径外 ' + top.length + ' 只）' : '');
+  // 占比 tab：条形满格 = 本榜最大 |占比|，图表与表格共用同一个基准，别各算一套
+  ratioScale = (currentTab === 'dynamic') ? computeRatioScale(top) : null;
+  const scaleNote = (currentTab === 'dynamic') ? '（条形满格 = 本榜最大 ' + ratioScaleText() + '）' : '';
+  document.getElementById('chartTitle').textContent =
+    chartTitleFor() + scaleNote + (offScope ? '（含口径外 ' + top.length + ' 只）' : '');
   renderChart(top, pf);
   renderTable(top, pf, offScope);
 }
@@ -1880,7 +1903,7 @@ function renderChart(stocks, primaryField) {
   let metric, maxVal;
   if (currentTab === 'dynamic') {
     metric = '_ratio';
-    maxVal = RATIO_FULL();      // 条形满格基准（固定值，见 RATIO_BAR_FULL）
+    maxVal = (ratioScale === null || ratioScale <= 0) ? 1 : ratioScale;   // 与表格同一个基准
   } else {
     metric = primaryField;
     maxVal = Math.max(...stocks.map(s => Math.abs(s[metric] || 0)), 0.01);
@@ -1890,9 +1913,10 @@ function renderChart(stocks, primaryField) {
     const val = s[metric] || 0;
     let displayVal, valColor, barColor;
     if (currentTab === 'dynamic') {
+      // 与表格同一套配色：正值红（主力蓝）、负值绿
       displayVal = (val >= 0 ? '+' : '') + val.toFixed(2) + '%';
-      valColor = val < 0 ? 'var(--green)' : (isRetailSide ? 'var(--purple)' : 'var(--blue)');
-      barColor = val < 0 ? 'green' : (isRetailSide ? 'purple' : 'blue');
+      valColor = ratioColor(val);
+      barColor = val < 0 ? 'green' : (isMainSide ? 'blue' : 'red');
     } else if (currentFlow === 'main') {
       // 主力视角：蓝涨绿跌（区分散户/中单视角）
       displayVal = (val >= 0 ? '+' : '') + val.toFixed(2) + '亿';
@@ -1904,7 +1928,8 @@ function renderChart(stocks, primaryField) {
       valColor = val >= 0 ? 'var(--red)' : 'var(--green)';
       barColor = val >= 0 ? (currentFlow === 'medium' ? 'cyan' : 'red') : 'green';
     }
-    const pct = Math.min(Math.abs(val) / maxVal * 100, 100);
+    let pct = Math.min(Math.abs(val) / maxVal * 100, 100);
+    if (val !== 0 && pct < 0.8) pct = 0.8;      // 非零值别缩成看不见的一条
     html += '<div class="bar-item">' +
       '<div class="bar-info"><span class="bar-name">' + s.name + '</span><span class="bar-value" style="color:' + valColor + '">' + displayVal + '</span></div>' +
       '<div class="bar-track"><div class="bar-fill ' + barColor + '" style="width:' + pct + '%"></div></div>' +
@@ -1913,14 +1938,16 @@ function renderChart(stocks, primaryField) {
   document.getElementById('chartArea').innerHTML = html;
 }
 
-// 占比单元格：占比 = 净额 ÷ 自由流通市值，条形按固定满格基准缩放（算不出分母显示 --）
+// 占比单元格：数字 + 迷你条（条长 = |占比| ÷ 本榜最大，满格见图表标题；算不出分母显示 --）
 function ratioTd(s) {
   const v = s._ratio;
   if (v === null || v === undefined) return '<td style="color:var(--dim)">--</td>';
-  const col = v < 0 ? 'var(--green)' : (ratioTier() === 'main' ? 'var(--blue)' : 'var(--purple)');
-  const w = Math.min(Math.abs(v) / RATIO_FULL() * 100, 100);
-  return '<td><div class="ratio-cell"><span style="color:' + col + ';font-weight:600">' + v.toFixed(2) + '%</span>'
-    + '<span class="mini-bar"><span class="mini-fill" style="width:' + w + '%;background:' + col + '"></span></span></div></td>';
+  const col = ratioColor(v);
+  return '<td><div class="ratio-cell">'
+    + '<span class="ratio-num" style="color:' + col + '">' + v.toFixed(2) + '%</span>'
+    + '<span class="ratio-bar" title="条形按本榜最大值满格（' + ratioScaleText() + '）">'
+    + '<span class="ratio-fill" style="width:' + ratioBarPct(v).toFixed(1) + '%;background:' + col + '"></span>'
+    + '</span></div></td>';
 }
 
 function renderTable(stocks, primaryField, offScope) {
@@ -1937,7 +1964,8 @@ function renderTable(stocks, primaryField, offScope) {
     {key: '_ratio', label: IS_MAIN_SIDE() ? '主力占比' : '散户占比',
      tip: (IS_MAIN_SIDE() ? '主力净额' : '散户净额') + ' ÷ 自由流通市值 × 100%。'
         + '分母 = 流通A股 × 现价 × 自由流通比例（不用流通市值，那会把锁定盘也算进分母）；'
-        + '约 7% 没有筹码数据的股票显示 --'},
+        + '约 7% 没有筹码数据的股票显示 --；'
+        + '条形长度 = 该值 ÷ 本榜最大值（榜首满格），红色=净买入、绿色=净卖出'},
     {key: 'sector', label: '行业'},
   ] : [
     // 资金动向 tab：不含动态占比列，表格更清爽
@@ -2090,9 +2118,36 @@ function ratioOf(s, tier) {               // tier: 'main' | 'retail'
   return (tier === 'main' ? (s.main_net || 0) : (s.retail_net || 0)) / m * 100;
 }
 function ratioTier() { return IS_MAIN_SIDE() ? 'main' : 'retail'; }
-// 条形满格基准（固定值 → 四个榜单横向可比）
-const RATIO_BAR_FULL = { main: 10, retail: 5 };
-function RATIO_FULL() { return RATIO_BAR_FULL[ratioTier()]; }
+/* ── 占比列的条形 ────────────────────────────────────────────────
+   满格基准 = **本榜显示行里 |占比| 的最大值**（榜首满格）。
+   ⚠️ 不要改回固定基准（原来主力 10% / 散户 5%）：真实占比多在 0.0x–10%，
+   固定基准会让所有条都缩成一小截、长度看不出差别，等于没有信息
+   （2026-09-17 用户反馈"占比这里的 ui"）。
+   基准只影响条的长短；数字永远是真的。满格值会标在图表标题上。 */
+let ratioScale = null;
+function computeRatioScale(rows) {
+  let m = 0;
+  for (const s of rows) {
+    const v = s && s._ratio;
+    if (v === null || v === undefined) continue;
+    const a = Math.abs(v);
+    if (a > m) m = a;
+  }
+  return m > 0 ? m : 1;
+}
+function ratioScaleText() { return ratioScale === null ? '--' : ratioScale.toFixed(2) + '%'; }
+// 配色：正值 = 红涨绿跌（主力单独用蓝，与资金动向表一致）；负值 = 绿
+function ratioColor(v) {
+  if (v < 0) return 'var(--green)';
+  return IS_MAIN_SIDE() ? 'var(--blue)' : 'var(--red)';
+}
+// 条形宽度（占满格的百分比；非零值给最小可见宽度，否则"几乎为 0"看起来像没数据）
+function ratioBarPct(v) {
+  const scale = (ratioScale === null || ratioScale <= 0) ? 1 : ratioScale;
+  let w = Math.min(Math.abs(v) / scale, 1) * 100;
+  if (v !== 0 && w < 6) w = 6;
+  return w;
+}
 function forceShow(code) {
   if (forceCodes.indexOf(code) < 0) forceCodes.push(code);
   renderView();
@@ -2912,8 +2967,12 @@ function switchTab(tab) {
   currentTab = tab;
   userSorted = false;
   forceCodes = [];      // 换榜单后「口径外」标记失效，重新判定
-  document.querySelectorAll('.tab-bar .tab').forEach(t => t.classList.remove('active'));
-  event.target.classList.add('active');
+  // ⚠️ 不要用隐式全局 event.target：它只在 onclick 派发期间存在，
+  // 任何程序化调用（脚本、快捷键、自动化）都会 ReferenceError（2026-09-17 踩到）
+  document.querySelectorAll('.tab-bar .tab').forEach(t => {
+    const hit = (t.getAttribute('onclick') || '').indexOf("switchTab('" + tab + "')") >= 0;
+    t.classList.toggle('active', hit);
+  });
   if (tab === 'flow') {
     currentSub = FLOW_SUBTABS[currentFlow][0].key;
   } else {

@@ -143,6 +143,10 @@ circ_ratio                         流通A股/总股本 %
    - ❌ 不许换回「成交额」（会被换手率带偏）；❌ 更不许用「流通市值」（它把锁定盘也算进分母 —— 中国石油两把尺子差 17 倍）。
    - 口径只在 `ratioOf(s, tier)` 一处定义，四个榜单、表格占比列、速查面板必须都走它。
    - **必须保留流动性过滤 `total_amount >= LIQUIDITY_MIN`(5 亿)**（样本口径，用户 2026-09-16 未要求改）。
+   - **条形满格 = 本榜显示行里 |占比| 的最大值**（`computeRatioScale()`，榜首满格），图表与表格共用 `ratioScale`。
+     ⚠️ 不要改回固定基准（曾用主力 10% / 散户 5%）：真实占比多在 0.0x–10%，固定基准会把所有条压成一小截、长度看不出差别，
+     等于没有信息（2026-09-17 用户反馈"占比这里的 ui"）。满格值必须标在图表标题上（`（条形满格 = 本榜最大 X%）`）。
+   - **配色与资金动向表一致**：正值 = 红（主力单独用蓝），负值 = 绿（`ratioColor()`）。别再用 `--purple`（它在本主题里就是蓝，会让散户占比看起来像主力）。
    - **没有筹码数据的票（约 7%）算不出分母** → 不进榜、单元格 `--`、空态必须解释。
 5. **`PRIMARY_FIELD()` 在占比 tab 恒返回 `retail_net`**：占比列的橙色高亮只属于「资金动向」tab，别"顺手统一"。
 6. **BOTTOM 榜单必须是负值**（对齐净流出），不要搞成"最小正值"。
@@ -205,13 +209,15 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 | `getBaseList()` / `applyDefaultSort()` / `renderView()` | 榜单：filter / 设排序 / 渲染 |
 | `matchSearch()` / `filterTable()` / `clearListFilter()` / `updateFilterChip()` | 榜单内筛选（扫整张榜单，同时作用于图表与表格）+ 常驻筛选状态 chip |
 | `emptyStateHTML()` / `quickLookup()` / `boardForStock()` / `forceShow()` / `ensureRatio()` / `LIQUIDITY_MIN` | 空态诊断（哪条规则挡的）+ 一键动作；「口径外」显示通道 |
-| `ffMcapMap()` / `ffMcapOf()` / `ratioOf()` / `ratioTier()` / `ratioTd()` / `RATIO_BAR_FULL` | **占比口径唯一实现**：自由流通市值分母 + 条形满格基准（主力 10% / 散户 5%）。`ratioOf` 返回 `null` = 算不出分母 |
+| `ffMcapMap()` / `ffMcapOf()` / `ratioOf()` / `ratioTier()` | **占比口径唯一实现**：自由流通市值分母。`ratioOf` 返回 `null` = 算不出分母 |
+| `ratioTd()` / `ratioColor()` / `ratioBarPct()` / `computeRatioScale()` / `ratioScale` / `ratioScaleText()` | 占比列显示层：数字 + 迷你条（`.ratio-num` / `.ratio-bar` / `.ratio-fill`）。条长 = \|占比\| ÷ 本榜最大、非零值最小 6% 宽；正值红（主力蓝）、负值绿。**改它要连 `renderChart` 的 dynamic 分支一起改（共用 `ratioScale`）** |
 | `wlApi()` / `wlSync()` / `wlPush()` / `scheduleWlPush()` / `wlSubmit()` / `wlLogout()` / `renderAccountBar()` / `wlAuthLost()` | 自选**账号**模式（注册/登录/并集合并/去抖推送/退出），面板顶部那一行由 `renderAccountBar()` 渲染 |
 | `openAccountPanel()` / `updateAccountBtn()` | 顶栏「登录 / 注册」入口（`#btnAccount`）：一键打开面板 + 展开表单 + 聚焦；按钮文案随登录态切换 |
 | `watchCodesFromUrl()` / `importWatchFromUrl()` / `cleanWatchParamFromUrl()` | `?w=` **只做一次性搬运**：导入后立刻把参数从地址栏抹掉 |
 | `drawStockPanel(title, note)` | 速查/自选共用面板。⚠️ `note` 必须显示在 `#spNote`（`hidden` 要按有无文案切换）—— 曾经这里被写成清空，等于把说明吞了 |
 | `toggleChipHelp()` | 筹码表「口径说明」折叠面板 |
-| `renderChart(stocks, field)` | 手写 SVG 条形图 |
+| `renderChart(stocks, field)` | 条形图（DOM 实现）。⚠️ 占比 tab 的 `maxVal` 必须取 `ratioScale`，与表格同一基准 |
+| `renderSubtabs()` / `switchTab()` | tab / subtab 切换。⚠️ `switchTab` **不许再用隐式全局 `event.target`**（只在 onclick 派发期间存在，程序化调用必炸，2026-09-17 踩到），要按传入的 `tab` 找 active 项 |
 | `renderTable(stocks, field)` | 榜单表格（8 列，含 ☆） |
 | `renderChipFlow()` / `chipSortTable(col)` / `toggleChipHelp()` | 筹码表（9 列，默认按户数变化升序，只渲染前 `CHIP_RENDER_LIMIT`=30 行） |
 | `renderSubtabs()` / `switchTab()` / `switchFlowTab()` / `switchSub()` / `sortTable()` | tab 与排序交互 |
