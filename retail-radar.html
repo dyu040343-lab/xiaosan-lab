@@ -1297,7 +1297,9 @@ body::before,body::after,.kpi-card::before,.kpi-card::after,.tab.active::after {
 .kpi-value {font-size:28px;letter-spacing:-1px;font-weight:600;white-space:nowrap;}
 .kpi-sub {font-size:10px;line-height:1.8;margin-top:10px;white-space:nowrap;}
 .kpi-card.share .kpi-value {font-size:11px;line-height:1.8;letter-spacing:0;display:flex;justify-content:space-between;gap:8px;white-space:normal;font-family:inherit;}
+/* ⚠️ 本条被下面的 Apple 主题块覆盖（同选择器、后者在后），保留只为标签配色 */
 #kpiShareValue>span {display:flex;flex-wrap:wrap;align-items:baseline;column-gap:2px;max-width:74px;color:var(--dim);}
+#kpiShareValue .share-num {display:flex;align-items:baseline;gap:0;}
 #kpiShareValue b {font-family:'SFMono-Regular',Consolas,monospace;font-size:20px;font-weight:500;color:var(--text-hi);}
 .stacked-bar {height:5px;border-radius:0;margin-top:12px;}
 .stacked-bar-segment.main,.tier-legend-dot.main {background:var(--blue);}
@@ -1390,7 +1392,10 @@ body {font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHe
 .kpi-sub .num {font-family:inherit; font-variant-numeric:tabular-nums;font-weight:500;}
 .kpi-card.share .kpi-value {display:flex;font-size:10px;flex-wrap:nowrap;gap:7px;line-height:1.4;}
 #kpiShareValue>span {display:block;max-width:none;white-space:nowrap;font-size:10px;}
-#kpiShareValue b {display:block;font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:25px;letter-spacing:-.7px;font-weight:600;margin:3px 0;}
+/* 数字 + 单位同一行：flex + baseline 对齐（别把 b 写成 display:block，会把 % 挤到下一行） */
+#kpiShareValue .share-num {display:flex;align-items:baseline;gap:0;}
+#kpiShareValue .share-num>i {font-style:normal;font-size:10px;}
+#kpiShareValue b {font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:25px;letter-spacing:-.7px;font-weight:600;margin:3px 0 0;}
 .stacked-bar {height:7px;border-radius:5px;margin-top:12px;gap:2px;}
 .tab-bar {display:inline-flex;gap:0;border:0;border-radius:999px;padding:5px;background:#e8e8ed;position:relative;isolation:isolate;}
 .tab {font-family:inherit;border:0!important;padding:9px 22px;font-size:13px;border-radius:999px;z-index:1;transition:color 200ms;}
@@ -1580,7 +1585,9 @@ button:focus-visible,.tab:focus-visible,.subtab:focus-visible {outline:3px solid
         <span>资金构成占比</span>
         <span class="kpi-label-tag" style="color:var(--text-hi)">三档</span>
       </div>
-      <div class="kpi-value" id="kpiShareValue"><span>散户 <b id="kpiShareRetail">--</b>%</span><span>中单 <b id="kpiShareMedium">--</b>%</span><span>主力 <b id="kpiShareMain">--</b>%</span></div>
+      <!-- 数字与 % 必须包在同一个 flex 行里：以前 % 是裸文本节点，前面 <b> 是 display:block，
+           结果「35」和「%」被拆成两行（2026-09-17 用户截图反馈） -->
+      <div class="kpi-value" id="kpiShareValue"><span>散户<span class="share-num"><b id="kpiShareRetail">--</b><i>%</i></span></span><span>中单<span class="share-num"><b id="kpiShareMedium">--</b><i>%</i></span></span><span>主力<span class="share-num"><b id="kpiShareMain">--</b><i>%</i></span></span></div>
       <div class="stacked-bar">
         <div class="stacked-bar-segment retail" id="shareBarRetail" style="width:0%"></div>
         <div class="stacked-bar-segment medium" id="shareBarMedium" style="width:0%"></div>

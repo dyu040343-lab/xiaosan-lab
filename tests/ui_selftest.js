@@ -242,6 +242,28 @@ async function boot() {
      /条形长度 = 该值 ÷ 本榜最大值（榜首满格）/.test(HTML));
   ok('列头 tooltip 说清颜色含义', /红色=净买入、绿色=净卖出/.test(HTML));
 
+  /* ═══ 2b. KPI「资金构成占比」：数字与 % 必须同一行 ═══ */
+  console.log('\n=== KPI 资金构成占比（数字 + % 不换行）===');
+  const shareRow = HTML.slice(HTML.indexOf('id="kpiShareValue"'));
+  const shareHtml = shareRow.slice(0, shareRow.indexOf('</div>') + 6);
+  ok('三个占比单元格都把「数字 + %」包进 .share-num', (shareHtml.match(/class="share-num"/g) || []).length === 3, shareHtml);
+  ok('不再有「</b>%」这种裸文本百分号（就是它被 display:block 挤到下一行的）',
+     shareHtml.indexOf('</b>%') < 0 && (shareHtml.match(/<i>%<\/i>/g) || []).length === 3, shareHtml);
+  ok('% 与数字是同一个 flex 行、按 baseline 对齐',
+     /#kpiShareValue \.share-num \{display:flex;align-items:baseline/.test(HTML));
+  ok('数字与 % 之间不留空格（中文排版「35%」）',
+     /#kpiShareValue \.share-num \{[^}]*gap:0/.test(HTML));
+  ok('b 不再被写成 display:block（会把它从同一行挤出去）',
+     !/#kpiShareValue b \{[^}]*display:block/.test(HTML));
+  ok('标签仍在数字上方（.share-num 之前有「散户/中单/主力」文本）',
+     /<span>散户<span class="share-num">/.test(shareHtml) && /<span>中单<span class="share-num">/.test(shareHtml)
+     && /<span>主力<span class="share-num">/.test(shareHtml), shareHtml.slice(0, 120));
+  const ts = raw.overview.tier_share || {};
+  ok('渲染值仍写进三个 <b>（结构改动没打断赋值）',
+     txt('kpiShareRetail') === String(ts.retail_pct) && txt('kpiShareMedium') === String(ts.medium_pct)
+     && txt('kpiShareMain') === String(ts.main_pct),
+     [ts.retail_pct, ts.medium_pct, ts.main_pct].join('/') + ' vs ' + [txt('kpiShareRetail'), txt('kpiShareMedium'), txt('kpiShareMain')].join('/'));
+
   /* ═══ 3. 回归：别把别的 tab 弄坏 ═══ */
   console.log('\n=== 回归 ===');
   G(`switchTab('flow'); currentFlow='retail'; currentSub='net'; userSorted=false; applyDefaultSort(); viewList=getBaseList(); renderView();`);
