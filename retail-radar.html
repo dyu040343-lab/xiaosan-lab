@@ -929,6 +929,16 @@ td.code-cell { color: var(--dim); font-size: 10px; }
   font-variant-numeric: tabular-nums;
 }
 
+/* 放量滞涨 tab 的口径提示：一行、不啰嗦 */
+.chart-note {
+  margin: 4px 0 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--dim);
+  font-family: 'Noto Sans SC', sans-serif;
+}
+.chart-note b { color: var(--text); font-weight: 600; }
+
 /* ═══ 自选星标 ═══ */
 .star-btn {
   display: inline-block;
@@ -1611,6 +1621,7 @@ button:focus-visible,.tab:focus-visible,.subtab:focus-visible {outline:3px solid
   <div class="tab-bar">
     <div class="tab active" onclick="switchTab('flow')">资金动向</div>
     <div class="tab" onclick="switchTab('dynamic')">资金占比动向</div>
+    <div class="tab" onclick="switchTab('volspan')">放量滞涨</div>
   </div>
 
   <!-- Sub Tabs -->
@@ -1637,6 +1648,8 @@ button:focus-visible,.tab:focus-visible,.subtab:focus-visible {outline:3px solid
   <div class="content">
     <div class="chart-box">
       <h3 id="chartTitle">散户净流入 TOP30</h3>
+      <!-- 放量滞涨 tab 的口径/风险一行提示（其他 tab 隐藏） -->
+      <p class="chart-note" id="chartNote" hidden></p>
       <div id="chartArea">
         <div class="skeleton skeleton-bar" style="width:80%"></div>
         <div class="skeleton skeleton-bar" style="width:60%"></div>
@@ -1751,6 +1764,7 @@ async function fetchData() {
     allData = await loadData();
     _universe = null;   // 数据刷新后重建「全市场指标索引」
     _ffMcap = null;     // 同时重建占比分母表（自由流通市值）
+    _volspan = null;    // 同时重建「放量滞涨」样本池与量价分
     ensureTurnover();   // 换手率兜底（旧数据没有该字段时现算）
     render();
     return true;
@@ -1814,6 +1828,7 @@ function PRIMARY_FIELD() {
   return currentFlow === 'medium' ? 'medium_net' : currentFlow === 'main' ? 'main_net' : 'retail_net';
 }
 function TAB_NAME() {
+  if (currentTab === 'volspan') return '量价';
   if (currentTab === 'dynamic') return '占比';
   return currentFlow === 'medium' ? '中单' : currentFlow === 'main' ? '主力' : '散户';
 }
@@ -1821,7 +1836,97 @@ function IS_RETAIL_SIDE() { return (currentTab === 'dynamic') && (currentSub ===
 function IS_MAIN_SIDE()   { return (currentTab === 'dynamic') && (currentSub === 'main_ratio_top' || currentSub === 'main_ratio_bottom'); }
 function CHART_METRIC() { return PRIMARY_FIELD(); }
 
+/* ═══ 「放量滞涨」榜（量价背离：换手/量比高 + 价格还没涨起来）════════════════
+   需求（用户 2026-09-17）：找「换手率高、价格还没涨起来」的股票。
+   ── 设计取舍（重要，改之前先读）────────────────────────────────────────
+   ① 不拆成「换手率TOP榜」+「价格BOTTOM榜」两张表：那样要用户自己做交集，
+      而两个 TOP30 往往交不上。这里合成一个 **量价分** 排序，同时把两个原始
+      维度都摆成列 —— 想单看某一边，点列头排序即可（等于白送那两张榜）。
+   ② 「换手率高」不能只看绝对水平：次新/小盘票换手率天然高。所以叠加 **量比**
+      （f10，相对自身近 5 日的放量倍数）一起衡量「活跃」。
+   ③ 「价格没涨起来」= **没动**（放量横盘），不是「跌了很多」。两个窗口都取绝对值：
+      · |今日涨幅| —— 今天已经拉起来的不要（避免追高），**今天跌狠的也不要**（那是破位不是蓄势）
+      · |60 日涨幅| —— 近 60 天涨了要扣分，跌惨了同样扣分
+      ⚠️ 两条都是看完真实数据后改的：
+        · 沐曦股份 量比 8.36、换手 44.97%、但 60 日 **跌 29%** —— 按「涨幅越低分越高」它会排第一，
+          可那是「放量下跌」，不是「价格没涨起来」。
+        · 今日涨幅若只看方向，榜首 30 会**全是当日下跌股**（|今日涨幅| 中位 4.6%，铂力特 −12% 排第 3）。
+          改成绝对值后 |今日涨幅| 中位 0.77%，涨跌各半 —— 这才是「量增价平」。
+      · 不用「价格 ÷ 一年均价」：那个比值混淆「位置」与「路径」（腰斩后反弹 30% 的票
+        看着仍在年均价下方，但其实已经在涨）；区间涨跌幅说的事情更直接、且同一接口同一规则。
+      · f25 年初至今 作为长周期参考单列展示（覆盖近 8 个月）。
+   ④ 两个条件用 **乘法** 合成（AND 语义）：任一条件不满足分数立刻塌陷；
+      若用加权求和，会奖励「涨得多但换手也高」的票 —— 那不是用户要的。
+      量价分 = 活跃分 × 蓄势分 ÷ 100
+   ⑤ 三道闸门剔除噪声：上市 ≥ 60 天（去次新）、成交额 ≥ 1 亿（去冷清）、
+      60 日跌幅 ≥ −40%（放量崩盘 ≠ 滞涨）。
+   ⑥ ⚠️ 多空两面：放量滞涨既可能是「吸筹」（有人不拉高、悄悄收集），也可能是
+      「派发」（借活跃度在高位出货）。**方向看主力净额**，所以主力净额全程摆在表里，
+      并单独提供「主力净流入」子榜。这是判断价值的关键，别只当装饰列。
+   ═══════════════════════════════════════════════════════════════════ */
+const VOLSPAN_MIN_AMOUNT = 1;       // 成交额门槛（亿元）
+const VOLSPAN_MIN_LIST_DAYS = 60;   // 上市天数门槛（自然日）
+const VOLSPAN_MAX_DROP = -40;       // 60 日跌幅下限（%）：比它更惨视为崩盘，不是滞涨
+let _volspan = null;                // { map: Map(code->row), reasons: Map(code->原因), size }
+
+// 百分位：返回「有多少比例的值 ≤ v」（0~100），比 min-max 归一化抗极值
+function buildPctRank(values) {
+  const a = values.slice().sort((x, y) => x - y);
+  return (v) => {
+    if (!a.length) return 0;
+    let lo = 0, hi = a.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (a[mid] <= v) lo = mid + 1; else hi = mid; }
+    return lo / a.length * 100;
+  };
+}
+
+function volspanPool() {
+  if (_volspan) return _volspan;
+  const rows = allData?.retail_flow || [];
+  const reasons = new Map();
+  const base = [];
+  const now = Date.now();
+  for (const s of rows) {
+    if (!(s.price > 0) || !(s.circ_shares > 0)) { reasons.set(s.code, 'nodata'); continue; }
+    // 老数据没有量价字段时不能算分（等下一版数据），明确标记而不是给个假分
+    if (s.vol_ratio === undefined || s.chg_60d === undefined) { reasons.set(s.code, 'nodata'); continue; }
+    if (s.list_date) {
+      const t = Date.parse(s.list_date + 'T00:00:00');
+      if (isFinite(t) && (now - t) / 86400000 < VOLSPAN_MIN_LIST_DAYS) { reasons.set(s.code, 'newlist'); continue; }
+    }
+    if ((s.total_amount || 0) < VOLSPAN_MIN_AMOUNT) { reasons.set(s.code, 'illiquid'); continue; }
+    if ((s.chg_60d || 0) < VOLSPAN_MAX_DROP) { reasons.set(s.code, 'crash'); continue; }
+    base.push(s);
+  }
+  const P_to = buildPctRank(base.map(s => s.turnover || 0));
+  const P_vr = buildPctRank(base.map(s => s.vol_ratio || 0));
+  // 关键：两个窗口都取 **绝对值** —— 离「没动」越远（涨多了或跌惨了）分越低。
+  // ⚠️ 今日涨幅这里**不能只用方向**：那样「今天在跌」会被当成「没涨起来」而拿满分，
+  //    实测榜首 30 只全是当日下跌、|今日涨幅| 中位 4.6%（铂力特 −12% 排第 3）—— 那是「放量下跌」。
+  //    改成绝对值后，榜首 30 的 |今日涨幅| 中位降到 0.77%（放量横盘），才是「量增价平」。
+  const P_abs0 = buildPctRank(base.map(s => Math.abs(s.change_pct || 0)));
+  const P_abs60 = buildPctRank(base.map(s => Math.abs(s.chg_60d || 0)));
+  const map = new Map();
+  for (const s of base) {
+    const act = 0.5 * P_to(s.turnover || 0) + 0.5 * P_vr(s.vol_ratio || 0);            // 活跃分 0~100
+    const stab = 100 - (0.5 * P_abs0(Math.abs(s.change_pct || 0)) + 0.5 * P_abs60(Math.abs(s.chg_60d || 0))); // 蓄势分 0~100
+    const vp = act * stab / 100;                                                       // 量价分 0~100
+    s._vs = { act: act, stab: stab };
+    s._vp = Math.round(vp * 10) / 10;
+    map.set(s.code, s);
+  }
+  _volspan = { map: map, reasons: reasons, size: base.length };
+  return _volspan;
+}
+
 function getBaseList() {
+  // 放量滞涨 tab：样本池 + 量价分已算好，方向过滤看子榜
+  if (currentTab === 'volspan') {
+    const pool = volspanPool();
+    let list = [...pool.map.values()];
+    if (currentSub === 'volspan_inst') list = list.filter(s => (s.main_net || 0) > 0);
+    return list;
+  }
   // 只做 filter，排序交给 renderView
   let stocks = [...(allData?.retail_flow || [])];
   const pf = PRIMARY_FIELD();
@@ -1862,6 +1967,8 @@ function applyDefaultSort() {
     'retail_ratio_bottom': ['_ratio', true],
     'main_ratio_top': ['_ratio', false],
     'main_ratio_bottom': ['_ratio', true],
+    'volspan_top': ['_vp', false],
+    'volspan_inst': ['_vp', false],
   };
   const d = map[currentSub] || [pf, false];
   sortCol = d[0]; sortAsc = d[1]; userSorted = false;
@@ -1877,6 +1984,8 @@ function chartTitleFor() {
     case 'retail_ratio_bottom': return '散户占比 BOTTOM30 · 净卖出最强';
     case 'main_ratio_top': return '主力占比 TOP30 · 净买入最强';
     case 'main_ratio_bottom': return '主力占比 BOTTOM30 · 净卖出最强';
+    case 'volspan_top':  return '放量滞涨 TOP30 · 量价分最高（今天放量 + 价格还没起来）';
+    case 'volspan_inst': return '放量滞涨 · 主力净流入 TOP30（吸筹候选）';
   }
   return 'TOP30';
 }
@@ -1918,6 +2027,20 @@ function renderView() {
   const scaleNote = (currentTab === 'dynamic') ? '（条形满格 = 本榜最大 ' + ratioScaleText() + '）' : '';
   document.getElementById('chartTitle').textContent =
     chartTitleFor() + scaleNote + (offScope ? '（含口径外 ' + top.length + ' 只）' : '');
+  // 放量滞涨 tab 的一行口径提示（样本量 + 闸门 + 公式 + 风险），其他 tab 隐藏
+  const noteEl = document.getElementById('chartNote');
+  if (noteEl) {
+    if (currentTab === 'volspan') {
+      noteEl.hidden = false;
+      noteEl.innerHTML = '样本 <b>' + volspanPool().size.toLocaleString() + '</b> 只'
+        + '（上市 ≥ ' + VOLSPAN_MIN_LIST_DAYS + ' 天 · 成交额 ≥ ' + VOLSPAN_MIN_AMOUNT + ' 亿 · 60日跌幅 ≤ '
+        + Math.abs(VOLSPAN_MAX_DROP) + '%）　量价分 = 活跃分 × 滞涨分 ÷ 100'
+        + '（活跃 = 换手率与量比的分位均值；蓄势 = 今天没大动 + 近60天没大动 —— 涨多了、跌狠了都扣分）　'
+        + '<b>⚠️ 放量滞涨可能是吸筹、也可能是派发 —— 方向看「主力净额」列</b>';
+    } else {
+      noteEl.hidden = true; noteEl.textContent = '';
+    }
+  }
   renderChart(top, pf);
   renderTable(top, pf, offScope);
 }
@@ -1930,7 +2053,10 @@ function renderChart(stocks, primaryField) {
   const isRetailSide = IS_RETAIL_SIDE();
   const isMainSide = IS_MAIN_SIDE();
   let metric, maxVal;
-  if (currentTab === 'dynamic') {
+  if (currentTab === 'volspan') {
+    metric = '_vp';                                             // 量价分 0~100
+    maxVal = Math.max(...stocks.map(s => s[metric] || 0), 1);
+  } else if (currentTab === 'dynamic') {
     metric = '_ratio';
     maxVal = (ratioScale === null || ratioScale <= 0) ? 1 : ratioScale;   // 与表格同一个基准
   } else {
@@ -1941,7 +2067,11 @@ function renderChart(stocks, primaryField) {
   for (const s of stocks) {
     const val = s[metric] || 0;
     let displayVal, valColor, barColor;
-    if (currentTab === 'dynamic') {
+    if (currentTab === 'volspan') {
+      displayVal = val.toFixed(1) + ' 分';
+      valColor = 'var(--accent)';
+      barColor = 'accent';
+    } else if (currentTab === 'dynamic') {
       // 与表格同一套配色：正值红（主力蓝）、负值绿
       displayVal = (val >= 0 ? '+' : '') + val.toFixed(2) + '%';
       valColor = ratioColor(val);
@@ -1967,6 +2097,47 @@ function renderChart(stocks, primaryField) {
   document.getElementById('chartArea').innerHTML = html;
 }
 
+// 涨跌幅单元格（带符号、红涨绿跌）
+function pctSignCell(v, dp) {
+  if (v === null || v === undefined) return '<td style="color:var(--dim)">--</td>';
+  const c = v > 0 ? 'var(--red)' : v < 0 ? 'var(--green)' : 'var(--dim)';
+  return '<td style="color:' + c + '">' + (v > 0 ? '+' : '') + v.toFixed(dp === undefined ? 2 : dp) + '%</td>';
+}
+
+// 量价分单元格：数字 + 0~100 的条（复用占比列的样式语言）
+function vpCell(s) {
+  const v = s._vp;
+  if (v === null || v === undefined) return '<td style="color:var(--dim)">--</td>';
+  const act = s._vs ? s._vs.act.toFixed(0) : '--';
+  const stab = s._vs ? s._vs.stab.toFixed(0) : '--';
+  return '<td><div class="ratio-cell">'
+    + '<span class="ratio-num" style="color:var(--accent)">' + v.toFixed(1) + '</span>'
+    + '<span class="ratio-bar" title="活跃分 ' + act + ' × 蓄势分 ' + stab + ' ÷ 100">'
+    + '<span class="ratio-fill" style="width:' + Math.max(0, Math.min(v, 100)).toFixed(0) + '%;background:var(--accent)"></span>'
+    + '</span></div></td>';
+}
+
+// 放量滞涨榜的一行
+function volspanRow(s, offScope) {
+  const cls = s.change_pct > 0 ? 'price-up' : s.change_pct < 0 ? 'price-down' : '';
+  const mn = s.main_net || 0;
+  const vr = s.vol_ratio;
+  return '<tr>' +
+    '<td class="code-cell">' + s.code + '</td>' +
+    '<td class="name-cell">' + starBtn(s.code) + s.name
+      + (offScope ? '<span class="off-scope" title="不在本榜单口径内，是你要求单独显示的">口径外</span>' : '') + '</td>' +
+    '<td class="' + cls + '">' + (s.price > 0 ? s.price.toFixed(2) : '--') + '</td>' +
+    '<td class="' + cls + '">' + (s.change_pct ? (s.change_pct > 0 ? '+' : '') + s.change_pct.toFixed(2) + '%' : '--') + '</td>' +
+    turnoverTd(s) +
+    '<td class="num-cell">' + (vr === null || vr === undefined ? '--' : vr.toFixed(2)) + '</td>' +
+    pctSignCell(s.chg_60d) +
+    pctSignCell(s.chg_ytd) +
+    vpCell(s) +
+    '<td class="num-cell" style="color:' + (mn >= 0 ? 'var(--blue)' : 'var(--green)') + '">' + (mn >= 0 ? '+' : '') + mn.toFixed(2) + '</td>' +
+    '<td><span class="tag">' + (s.sector || '--') + '</span></td>' +
+    '</tr>';
+}
+
 // 换手率单元格：非方向性指标，用中性色 + 等宽数字（红绿留给涨跌/资金）
 function turnoverTd(s) {
   const v = s.turnover;
@@ -1988,8 +2159,32 @@ function ratioTd(s) {
 
 function renderTable(stocks, primaryField, offScope) {
   const isDynamic = currentTab === 'dynamic';
+  const isVolspan = currentTab === 'volspan';
   // 价格 / 涨跌 / 换手率 三列紧跟「名称」之后，方便一眼看到实时行情与活跃度
-  const cols = isDynamic ? [
+  const cols = isVolspan ? [
+    {key: 'code', label: '代码'},
+    {key: 'name', label: '名称'},
+    {key: 'price', label: '价格'},
+    {key: 'change_pct', label: '今日涨跌'},
+    {key: 'turnover', label: '换手率',
+     tip: '东财官方换手率（成交量 ÷ 流通股本）。绝对活跃度；次新/小盘票天然偏高，所以还要配「量比」一起看'},
+    {key: 'vol_ratio', label: '量比',
+     tip: '当日每分钟均量 ÷ 前 5 日每分钟均量（东财 f10）。相对自己的放量倍数：1 = 与平时持平，2 = 放量一倍。这是「今天有资金在动」的核心证据'},
+    {key: 'chg_60d', label: '60日涨幅',
+     tip: '近 60 个自然日的涨跌幅。负或接近 0 = 这波还没涨起来；明显为正 = 已经启动，追高风险大'},
+    {key: 'chg_ytd', label: '年初至今',
+     tip: '年初至今涨跌幅，作为长周期参考（覆盖近 8 个月）。用它看「是不是已经涨了一年」'},
+    {key: '_vp', label: '量价分',
+     tip: '活跃分 × 蓄势分 ÷ 100（0~100）。'
+        + '活跃分 =（换手率分位 + 量比分位）÷2；'
+        + '蓄势分 = 100 −（|今日涨幅|分位 + |60日涨幅|分位）÷2 —— 今天没大动、近 60 天也没大动（横盘）才给高分；'
+        + '已经涨起来的和跌狠的都会扣分（「量增价平」量的是横盘，不是深跌）。'
+        + '乘法语义 = 两个条件都要满足：任一条件不满足，分数立刻塌陷。'
+        + '⚠️ 放量滞涨既可能是吸筹（不拉高悄悄收集），也可能是派发（借活跃度出货），方向必须看「主力净额」'},
+    {key: 'main_net', label: '主力净额',
+     tip: '超大单 + 大单净额（亿元）。⚠️ 这是本榜的关键判别列：放量滞涨 + 主力净流入 = 吸筹候选；放量滞涨 + 主力净流出 = 派发警示'},
+    {key: 'sector', label: '行业'},
+  ] : isDynamic ? [
     {key: 'code', label: '代码'},
     {key: 'name', label: '名称'},
     {key: 'price', label: '价格'},
@@ -2020,7 +2215,7 @@ function renderTable(stocks, primaryField, offScope) {
   ];
   // 当前资金视角列高亮（仅资金动向 tab；占比 tab 的 primaryField 恒为 retail_net，不参与高亮）
   const hlKey = (currentTab === 'flow') ? primaryField : null;
-  const ncols = isDynamic ? 10 : 9;
+  const ncols = isVolspan ? 11 : (isDynamic ? 10 : 9);
   let headHtml = '<tr>' + cols.map(c => {
     let cls = 'sortable';
     if (sortCol === c.key) cls += sortAsc ? ' sort-asc' : ' sort-desc';
@@ -2031,6 +2226,7 @@ function renderTable(stocks, primaryField, offScope) {
 
   let bodyHtml = '';
   for (const s of stocks) {
+    if (isVolspan) { bodyHtml += volspanRow(s, offScope); continue; }
     const cls = s.change_pct > 0 ? 'price-up' : s.change_pct < 0 ? 'price-down' : '';
     const r = s.retail_net || 0, m = s.medium_net || 0, mn = s.main_net || 0;
     // 散户/中单：红涨绿跌；主力：蓝涨绿跌（资金动向tab）
@@ -2106,7 +2302,8 @@ function yi(v, color) {
 }
 // 这只票在本 tab 的「哪个 subtab」里？用来给「切过去」按钮
 function subLabel(key) {
-  const arr = (currentTab === 'dynamic') ? DYNAMIC_SUBTABS : FLOW_SUBTABS[currentFlow];
+  const arr = (currentTab === 'volspan') ? VOLSPAN_SUBTABS
+            : (currentTab === 'dynamic') ? DYNAMIC_SUBTABS : FLOW_SUBTABS[currentFlow];
   const f = (arr || []).filter(x => x.key === key)[0];
   return f ? f.label : key;
 }
@@ -2210,6 +2407,25 @@ function emptyStateHTML() {
   const lookupBtn = '<button class="empty-btn primary" onclick="quickLookup(\'' + s.code + '\')">看它全部指标</button>';
   const clearBtn = '<button class="empty-btn" onclick="clearListFilter()">清除筛选</button>';
 
+  // ⓿ 放量滞涨 tab：说清被哪道闸门挡住（否则用户只会觉得"查不到"）
+  if (currentTab === 'volspan') {
+    const reason = (volspanPool().reasons.get(s.code)) || 'inpool';
+    const why = {
+      nodata: '它缺少量价或流通盘数据（若整页都空，通常是数据还是旧版，等下一版即可）',
+      newlist: '它上市不满 <b>' + VOLSPAN_MIN_LIST_DAYS + ' 天</b> —— 次新股换手率天然极高，会污染整张榜',
+      illiquid: '它今天成交额不足 <b>' + VOLSPAN_MIN_AMOUNT + ' 亿</b>，太冷清',
+      crash: '它 60 日跌幅超过 <b>' + Math.abs(VOLSPAN_MAX_DROP) + '%</b> —— 那是放量崩盘，不是「滞涨」',
+      inpool: currentSub === 'volspan_inst'
+        ? '它在样本池里，但今天<b>主力是净流出</b>（本子榜只收主力净流入的票）'
+        : '它在样本池里，但不在前 30 名内',
+    }[reason];
+    return '<div class="empty-tip">'
+      + '当前榜单里没有 ' + name + '<br>' + why + '<br>'
+      + (reason === 'inpool' && currentSub === 'volspan_inst'
+          ? '<button class="empty-btn" onclick="switchSub(\'volspan_top\')">切到「放量滞涨TOP」看它</button>' : '')
+      + clearBtn + lookupBtn
+      + '</div>';
+  }
   // ① 算不出分母：没有筹码数据（新股 / 未披露十大流通股东）
   if (currentTab === 'dynamic' && ffMcapOf(s) === null) {
     return '<div class="empty-tip">'
@@ -2384,7 +2600,10 @@ const SP_COLS = [
   {key:'price',        label:'价格'},
   {key:'change_pct',   label:'涨跌'},
   {key:'total_amount', label:'成交额', tip:'当日成交额（亿元）'},
-  {key:'turnover',     label:'换手率', tip:'成交额 ÷ 流通市值 × 100%（东财官方 f8 口径）。筹码转手活跃度：<1% 清淡、1–3% 正常、>10% 高换手。与「成交额」的区别：成交额是今天动了多少钱，换手率是相当于多大比例的盘子换了手，因此不同盘子的股票之间可比'},
+  {key:'turnover',     label:'换手率', tip:'东财官方换手率（成交量 ÷ 流通股本）。低于 1% 属清淡、1–3% 属正常、高于 10% 属高换手。与「成交额」的区别：成交额是今天动了多少钱，换手率是相当于多大比例的盘子换了手，因此不同盘子的股票之间可比'},
+  {key:'vol_ratio',    label:'量比', tip:'当日每分钟均量 ÷ 前 5 日每分钟均量（东财 f10）。相对自己的放量倍数：1 = 与平时持平，2 = 放量一倍'},
+  {key:'chg_60d',      label:'60日涨幅', tip:'近 60 个自然日涨跌幅。负或接近 0 = 还没涨起来；明显为正 = 已经启动'},
+  {key:'chg_ytd',      label:'年初至今', tip:'年初至今涨跌幅，长周期参考（覆盖近 8 个月）'},
   {key:'ff_mcap',      label:'自由流通市值', tip:'流通A股 × 现价 × 自由流通比例（亿元）。占比榜的分母 —— 用它而不是流通市值，因为锁定盘不参与日常博弈'},
   {key:'retail_net',   label:'散户净额', tip:'小单净额（亿元）。散户（小单）净买入为正'},
   {key:'medium_net',   label:'中单净额', tip:'中单净额（亿元）'},
@@ -2890,6 +3109,15 @@ function spCell(s, key) {
       return '<td>' + (NULLISH(s.total_amount) ? '--' : s.total_amount.toFixed(2) + '<span style="color:var(--dimmer);font-size:10px">亿</span>') + '</td>';
     case 'turnover':
       return NULLISH(s.turnover) ? '<td style="color:var(--dim)">--</td>' : '<td class="num-cell">' + s.turnover.toFixed(2) + '%</td>';
+    case 'vol_ratio':
+      return NULLISH(s.vol_ratio) ? '<td style="color:var(--dim)">--</td>' : '<td class="num-cell">' + s.vol_ratio.toFixed(2) + '</td>';
+    case 'chg_60d':
+    case 'chg_ytd': {
+      const pv = s[key];
+      if (NULLISH(pv)) return '<td style="color:var(--dim)">--</td>';
+      return '<td style="color:' + (pv > 0 ? 'var(--red)' : pv < 0 ? 'var(--green)' : 'var(--dim)') + '">'
+        + (pv > 0 ? '+' : '') + pv.toFixed(2) + '%</td>';
+    }
     case 'retail_net':
     case 'medium_net': {
       const v = s[key];
@@ -2982,6 +3210,11 @@ const DYNAMIC_SUBTABS = [
   {key: 'main_ratio_bottom', label: '主力占比BOTTOM'},
 ];
 
+const VOLSPAN_SUBTABS = [
+  {key: 'volspan_top',  label: '放量滞涨TOP'},
+  {key: 'volspan_inst', label: '主力净流入'},
+];
+
 function renderSubtabs() {
   const flowBar = document.getElementById('subtabFlow');
   const subBar = document.getElementById('subtabBar');
@@ -2996,6 +3229,12 @@ function renderSubtabs() {
     // 渲染二级 subtab（净流入/净流出）
     const subs = FLOW_SUBTABS[currentFlow];
     subBar.innerHTML = subs.map(s =>
+      '<div class="subtab' + (currentSub === s.key ? ' active' : '') + '" onclick="switchSub(\'' + s.key + '\')">' + s.label + '</div>'
+    ).join('');
+  } else if (currentTab === 'volspan') {
+    // 放量滞涨：同样隐藏一级 subtab（这里没有散户/中单/主力之分），只渲染二级
+    flowBar.classList.add('hidden');
+    subBar.innerHTML = VOLSPAN_SUBTABS.map(s =>
       '<div class="subtab' + (currentSub === s.key ? ' active' : '') + '" onclick="switchSub(\'' + s.key + '\')">' + s.label + '</div>'
     ).join('');
   } else {
@@ -3019,6 +3258,8 @@ function switchTab(tab) {
   });
   if (tab === 'flow') {
     currentSub = FLOW_SUBTABS[currentFlow][0].key;
+  } else if (tab === 'volspan') {
+    currentSub = VOLSPAN_SUBTABS[0].key;
   } else {
     currentSub = DYNAMIC_SUBTABS[0].key;
   }

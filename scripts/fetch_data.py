@@ -178,7 +178,7 @@ def fetch_from_eastmoney():
                         "invt": 2,
                         "fid": "f62",
                         "fs": "m:0 t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048",
-                        "fields": "f12,f14,f2,f3,f6,f8,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f100,f124,f38,f39",
+                        "fields": "f12,f14,f2,f3,f6,f8,f10,f24,f25,f26,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f100,f124,f38,f39",
                     }
                     data = _fetch_page(session, base_url, params)
                     items = data["data"].get("diff", [])
@@ -283,6 +283,19 @@ def fetch_from_eastmoney():
         # ⚠️ 别把 f8 和 f84 搞混：本接口里 f84 是「小单净额」
         turnover = round(to_float(item.get("f8")), 2)
 
+        # ── 量价字段（2026-09-17 起，供「放量滞涨」榜使用）──────────────────
+        #   f10 = 量比（当日每分钟均量 ÷ 前 5 日每分钟均量）→ 「相对自身」的放量倍数，
+        #         比单看换手率更能识别「今天突然有资金在动」
+        #   f24 = 60 日涨跌幅(%)   f25 = 年初至今涨跌幅(%) → 「价格涨没涨起来」
+        #   f26 = 上市日期(YYYYMMDD) → 用来剔除新股（次新换手率天然极高，会污染换手率榜）
+        # ⚠️ 这三个字段都只在 clist/ulist 接口里是量价，语义随接口变，别在 stock/get 上复用
+        vol_ratio = round(to_float(item.get("f10")), 2)
+        chg_60d = round(to_float(item.get("f24")), 2)
+        chg_ytd = round(to_float(item.get("f25")), 2)
+        ld_raw = str(item.get("f26") or "").strip()
+        list_date = (f"{ld_raw[:4]}-{ld_raw[4:6]}-{ld_raw[6:8]}"
+                     if len(ld_raw) == 8 and ld_raw.isdigit() else "")
+
         # f100 = 东财行业板块名称（真实行业），为空或 "-" 时退回关键词猜测
         sector = str(item.get("f100") or "").strip()
         if not sector or sector == "-":
@@ -305,6 +318,10 @@ def fetch_from_eastmoney():
             "small_pct": small_pct,
             "total_amount": total_amount,
             "turnover": turnover,                        # 换手率（%，东财官方 f8）
+            "vol_ratio": vol_ratio,                      # 量比（东财 f10）
+            "chg_60d": chg_60d,                          # 60 日涨跌幅（%，东财 f24）
+            "chg_ytd": chg_ytd,                          # 年初至今涨跌幅（%，东财 f25）
+            "list_date": list_date,                      # 上市日期 YYYY-MM-DD（东财 f26）
             "dynamic_ratio": dynamic_ratio,
             "total_shares": to_float(item.get("f38")),   # 总股本（股）
             "circ_shares": to_float(item.get("f39")),    # 流通A股（股，不含H股）

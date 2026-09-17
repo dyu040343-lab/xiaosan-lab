@@ -240,8 +240,11 @@ async function boot() {
     return JSON.stringify(rows.filter(s => toExpect[s.code] !== null && s.turnover !== null && Math.abs(s.turnover - toExpect[s.code]) > 0.011).slice(0, 3).map(s => [s.code, s.turnover, toExpect[s.code]]));
   })());
   ok('官方值不会被兜底覆盖（哨兵值验证）', (() => {
+    const keep = G('allData.retail_flow[0].turnover');
     G(`allData.retail_flow[0].turnover = 12.34; ensureTurnover();`);
-    return G('allData.retail_flow[0].turnover') === 12.34;
+    const held = G('allData.retail_flow[0].turnover') === 12.34;
+    G(`allData.retail_flow[0].turnover = ${JSON.stringify(keep)};`);   // ⚠️ 必须还原：否则会带偏后面的分位分布
+    return held;
   })());
 
   G(`switchTab('flow'); currentFlow='retail'; currentSub='net'; userSorted=false; applyDefaultSort(); viewList=getBaseList(); renderView();`);
@@ -320,6 +323,137 @@ async function boot() {
      txt('kpiShareRetail') === String(ts.retail_pct) && txt('kpiShareMedium') === String(ts.medium_pct)
      && txt('kpiShareMain') === String(ts.main_pct),
      [ts.retail_pct, ts.medium_pct, ts.main_pct].join('/') + ' vs ' + [txt('kpiShareRetail'), txt('kpiShareMedium'), txt('kpiShareMain')].join('/'));
+
+  /* ═══ 2c. 放量滞涨榜（量价分）═══ */
+  console.log('\n=== 放量滞涨（活跃分 × 蓄势分）===');
+  // ⚠️ 前面「换手率兜底」测试把 allData 里的官方 f8 换成了近似值（两者能差几十 pp），
+  //    会带偏 turnover 分位 → 量价分对不上。这里重新装一次干净数据，保证断言可比。
+  await G('fetchData()');
+  // 独立复算样本池与三档分（不复用页面函数）
+  const vs = (() => {
+    const now = Date.now();
+    const pool = [];
+    for (const s of raw.retail_flow) {
+      if (!(s.price > 0) || !(s.circ_shares > 0)) continue;
+      if (s.vol_ratio === undefined || s.chg_60d === undefined) continue;
+      if (s.list_date) { const t = Date.parse(s.list_date + 'T00:00:00'); if (isFinite(t) && (now - t) / 86400000 < 60) continue; }
+      if ((s.total_amount || 0) < 1) continue;
+      if ((s.chg_60d || 0) < -40) continue;
+      pool.push(s);
+    }
+    const ranks = (arr) => { const a = arr.slice().sort((x, y) => x - y);
+      return (v) => { let lo = 0, hi = a.length; while (lo < hi) { const m = (lo + hi) >> 1; if (a[m] <= v) lo = m + 1; else hi = m; } return lo / a.length * 100; }; };
+    const P_to = ranks(pool.map(s => s.turnover || 0)), P_vr = ranks(pool.map(s => s.vol_ratio || 0));
+    const P_a0 = ranks(pool.map(s => Math.abs(s.change_pct || 0))), P_a60 = ranks(pool.map(s => Math.abs(s.chg_60d || 0)));
+    const out = new Map();
+    for (const s of pool) {
+      const act = 0.5 * P_to(s.turnover || 0) + 0.5 * P_vr(s.vol_ratio || 0);
+      const stab = 100 - (0.5 * P_a0(Math.abs(s.change_pct || 0)) + 0.5 * P_a60(Math.abs(s.chg_60d || 0)));
+      out.set(s.code, { act, stab, vp: act * stab / 100 });
+    }
+    return { pool, out, hasFields: raw.retail_flow.filter(s => s.vol_ratio !== undefined).length };
+  })();
+  // 这条只报告不判定：旧数据快照本来就没有量价字段，那是数据版本问题、不是缺陷
+  console.log('数据带量价字段: ' + vs.hasFields + '/' + raw.retail_flow.length
+    + (vs.hasFields ? '' : '  → 旧版数据，跳过放量滞涨断言'));
+  if (!vs.hasFields) { /* 跳过下面全部放量滞涨断言 */ }
+  else {
+    ok('顶栏第三个 tab「放量滞涨」存在', /onclick="switchTab\('volspan'\)">放量滞涨/.test(HTML));
+    G(`switchTab('volspan');`);
+    ok('切换后子榜 = 放量滞涨TOP，一级 subtab 隐藏',
+       G('currentSub') === 'volspan_top' && G(`document.getElementById('subtabFlow').classList.contains('hidden')`),
+       G('currentSub'));
+    const poolSize = G('volspanPool().size');
+    ok('样本池数量 = 独立复算值（' + vs.pool.length + '）', poolSize === vs.pool.length, poolSize);
+
+    // 四道闸门
+    const byCode = {}; for (const s of raw.retail_flow) byCode[s.code] = s;
+    const pick = (pred) => { const x = vs.pool.find(() => false) || raw.retail_flow.find(pred); return x; };
+    const newOne = pick(s => s.list_date && (Date.now() - Date.parse(s.list_date + 'T00:00:00')) / 86400000 < 60);
+    if (newOne) ok('新股被剔除（上市不足 60 天）', !G(`volspanPool().map.has('${newOne.code}')`) && G(`volspanPool().reasons.get('${newOne.code}')`) === 'newlist',
+       newOne.code + ' ' + newOne.list_date);
+    const illiq = pick(s => (s.total_amount || 0) > 0 && (s.total_amount || 0) < 1 && s.vol_ratio !== undefined && s.price > 0);
+    if (illiq) ok('冷清票被剔除（成交额 < 1 亿）', G(`volspanPool().reasons.get('${illiq.code}')`) === 'illiquid', illiq.code + ' ' + illiq.total_amount);
+    const crash = pick(s => (s.chg_60d || 0) < -40);
+    if (crash) ok('放量崩盘被剔除（60日跌幅 > 40%）', G(`volspanPool().reasons.get('${crash.code}')`) === 'crash', crash.code + ' ' + crash.chg_60d);
+    else console.log('  （今天没有 60 日跌超 40% 的票，跳过该断言）');
+
+    // 分数公式
+    const topRows = G('[...volspanPool().map.values()].slice(0, 400)');
+    const badScore = topRows.filter(s => {
+      const e = vs.out.get(s.code);
+      return !e || Math.abs(s._vp - e.vp) > 0.06 || Math.abs(s._vs.act - e.act) > 0.06 || Math.abs(s._vs.stab - e.stab) > 0.06;
+    });
+    ok('量价分 = 活跃分 × 蓄势分 ÷ 100（抽查 400 只，与独立复算一致）', badScore.length === 0,
+       JSON.stringify(badScore.slice(0, 3).map(s => [s.code, s._vp, vs.out.get(s.code) && vs.out.get(s.code).vp])));
+
+    // ⭐ 关键行为：不能因为「跌得多」就拿高分（沐曦股份那种放量下跌必须被压下去）
+    const ranked = G('[...volspanPool().map.values()].slice().sort((a,b)=>b._vp-a._vp)');
+    const top30 = ranked.slice(0, 30);
+    const medAbs60 = (() => { const a = top30.map(s => Math.abs(s.chg_60d)).sort((x, y) => x - y); return a[Math.floor(a.length / 2)]; })();
+    ok('★ 榜首 30 只以「横盘」为主（|60日涨幅| 中位数 < 15%）', medAbs60 < 15, medAbs60.toFixed(1) + '%');
+    // 直接量「横盘票 vs 大幅波动票」的分位差：这才是设计意图（蓄势分用 |60日涨幅|）
+    const pctOf = (list) => { let sum = 0; for (const s of list) sum += ranked.indexOf(s); return 100 - sum / list.length / ranked.length * 100; };
+    const flatOnes = ranked.filter(s => Math.abs(s.chg_60d) <= 8);
+    const wildOnes = ranked.filter(s => Math.abs(s.chg_60d) > 25);
+    ok('★ 横盘票（|60日涨幅|≤8%）的平均排名分位显著高于大幅波动票（>25%）',
+       flatOnes.length > 20 && wildOnes.length > 20 && pctOf(flatOnes) - pctOf(wildOnes) > 20,
+       '横盘 ' + pctOf(flatOnes).toFixed(0) + ' vs 波动 ' + pctOf(wildOnes).toFixed(0) + '（差 ' + (pctOf(flatOnes) - pctOf(wildOnes)).toFixed(0) + 'pp，样本 ' + flatOnes.length + '/' + wildOnes.length + '）');
+    const downAll = top30.every(s => s.change_pct < 0);
+    const medAbs0 = (() => { const a = top30.map(s => Math.abs(s.change_pct)).sort((x, y) => x - y); return a[Math.floor(a.length / 2)]; })();
+    ok('★ 榜首 30 不会全是当日下跌股（否则「今日涨幅」只罚了上涨）', !downAll,
+       '当日下跌 ' + top30.filter(s => s.change_pct < 0).length + '/30');
+    ok('★ 榜首 30 的 |今日涨幅| 中位数 < 2%（说明确实是"今天没大动"）', medAbs0 < 2, medAbs0.toFixed(2) + '%');
+    const avgTop = top30.reduce((a, s) => a + Math.abs(s.chg_60d), 0) / top30.length;
+    const avgPool = ranked.reduce((a, s) => a + Math.abs(s.chg_60d), 0) / ranked.length;
+    ok('★ 榜首 30 的 |60日涨幅| 均值不到全池的一半（分数确实偏向横盘）',
+       avgTop < avgPool * 0.5, '榜首 ' + avgTop.toFixed(1) + '% vs 全池 ' + avgPool.toFixed(1) + '%');
+
+    // 表格（先清掉前面测试留下的搜索词，否则会被筛空）
+    G(`searchText = ''; forceCodes = []; sortCol = null; userSorted = false; applyDefaultSort(); viewList = getBaseList(); renderView();`);
+    const vsHead = html('tableHead');
+    const vsLabels = [...vsHead.replace(/<span class="sort-icon"><\/span>/g, '').matchAll(/>([^<>]+)<\/th>/g)].map(m => m[1].trim());
+    ok('表格 11 列且顺序正确',
+       vsLabels.join('/') === '代码/名称/价格/今日涨跌/换手率/量比/60日涨幅/年初至今/量价分/主力净额/行业', vsLabels.join('/'));
+    ok('默认按量价分降序', G('sortCol') === '_vp' && G('sortAsc') === false, G('sortCol') + '/' + G('sortAsc'));
+    // ⚠️ 用宿主侧字符串做 matchAll：在 vm 里对 vm 字符串跑 matchAll 会拿到空结果（踩过）
+    const rendered = [...html('tableBody').matchAll(/data-star="(\d{6})"/g)].map(m => m[1]);
+    ok('表格 30 行，且榜首 = 独立复算的量价分最高', rendered.length === 30 && rendered[0] === ranked[0].code,
+       rendered.length + ' | ' + rendered[0] + ' vs ' + ranked[0].code + ' | HTML: ' + html('tableBody').slice(0, 200));
+    ok('量价分渲染成「数字 + 条」', /class="ratio-num"[^>]*>[\d.]+<\/span><span class="ratio-bar"/.test(html('tableBody')));
+
+    // 图表
+    const vsBars = [...html('chartArea').matchAll(/bar-fill (\w+)" style="width:([\d.]+)%/g)].map(m => ({ cls: m[1], w: num(m[2]) }));
+    ok('图表 30 根条、榜首满格、配色 accent',
+       vsBars.length === 30 && Math.abs(vsBars[0].w - 100) < 0.05 && vsBars.every(b => b.cls === 'accent'),
+       vsBars.length + ' | ' + JSON.stringify(vsBars[0]));
+    ok('图表数值带「分」单位', /[\d.]+ 分<\/span>/.test(html('chartArea')), html('chartArea').slice(0, 160));
+
+    // 口径提示
+    ok('图表下方显示口径提示（样本量 + 风险）',
+       html('chartNote').indexOf('样本') >= 0 && html('chartNote').indexOf('派发') >= 0 && els['chartNote'].hidden === false,
+       html('chartNote').slice(0, 110));
+
+    // 主力净流入子榜
+    G(`switchSub('volspan_inst'); viewList = getBaseList(); renderView();`);
+    const instNets = G(`viewList.slice(0,30).map(s => s.main_net || 0)`);
+    ok('「主力净流入」子榜里 30 行主力净额全为正', instNets.length === 30 && instNets.every(v => v > 0),
+       JSON.stringify(instNets.slice(0, 5)));
+
+    // 空态解释闸门
+    if (newOne) {
+      G(`currentSub='volspan_top'; searchText='${newOne.code}'; forceCodes=[]; viewList=getBaseList(); renderView();`);
+      ok('搜新股 → 空态说明「上市不满 60 天」', html('tableBody').indexOf('上市不满') >= 0
+         || html('chartArea').indexOf('上市不满') >= 0,
+         (html('chartArea') + html('tableBody')).slice(0, 200));
+      G(`searchText=''; forceCodes=[]; viewList=getBaseList(); renderView();`);
+    }
+    // 回到其他 tab 时提示行要收起
+    G(`switchTab('flow'); currentFlow='retail'; currentSub='net'; viewList=getBaseList(); renderView();`);
+    ok('切回资金动向 tab → 口径提示隐藏', els['chartNote'].hidden === true, String(els['chartNote'].hidden));
+    ok('速查面板新增 量比/60日涨幅/年初至今 三列',
+       html('spHead').indexOf('量比') >= 0 && html('spHead').indexOf('60日涨幅') >= 0 && html('spHead').indexOf('年初至今') >= 0);
+  }
 
   /* ═══ 3. 回归：别把别的 tab 弄坏 ═══ */
   console.log('\n=== 回归 ===');
