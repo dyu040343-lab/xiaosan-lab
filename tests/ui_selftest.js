@@ -214,6 +214,59 @@ async function boot() {
   ok('当前基准值 = 榜单最大值', Math.abs(G('ratioScale') - Math.abs(expectBoard('main', 'bottom')[0].v)) < 0.005,
      G('ratioScale'));
 
+  /* ═══ 1b. 换手率 ═══ */
+  console.log('\n=== 换手率（成交额 ÷ 流通市值，东财 f8 口径）===');
+  const toExpect = {};   // code -> 独立算出的换手率
+  for (const x of raw.retail_flow) {
+    const mcap = (x.circ_shares || 0) / 1e8 * (x.price || 0);
+    toExpect[x.code] = mcap > 0 ? Math.round((x.total_amount || 0) / mcap * 100 * 100) / 100 : null;
+  }
+  ok('有价有流通盘的股票都算出了 turnover',
+     G(`allData.retail_flow.filter(s => s.price > 0 && s.circ_shares > 0).every(s => s.turnover !== null && s.turnover !== undefined)`),
+     G(`(() => { const b = allData.retail_flow.filter(s => s.price > 0 && s.circ_shares > 0 && (s.turnover === null || s.turnover === undefined)); return b.length + ' 只缺失 ' + JSON.stringify(b.slice(0,3).map(s=>s.code)); })()`));
+  ok('没价/没流通盘的（退市整理、停牌）显示 -- 而不是 0',
+     G(`allData.retail_flow.filter(s => !s.price || !s.circ_shares).every(s => s.turnover === null)`),
+     G(`allData.retail_flow.filter(s => !s.price).length + ' 只无价（如退市/停牌）'`));
+  ok('兜底换算值与「成交额 ÷ 流通市值」完全一致（抽查 200 只）', (() => {
+    const rows = G('allData.retail_flow.slice(0, 200)');
+    const bad = rows.filter(s => toExpect[s.code] !== null && Math.abs(s.turnover - toExpect[s.code]) > 0.011);
+    return bad.length === 0;
+  })());
+  ok('已有官方 f8 时不被覆盖（数据里带 turnover 就用它）', (() => {
+    G('allData.retail_flow[0].turnover = 99.99; ensureTurnover();');
+    const keep = G('allData.retail_flow[0].turnover') === 99.99;
+    delete G('allData.retail_flow[0]').turnover;
+    G('ensureTurnover();');
+    return keep && Math.abs(G('allData.retail_flow[0].turnover') - toExpect[G('allData.retail_flow[0].code')]) < 0.011;
+  })());
+
+  G(`switchTab('flow'); currentFlow='retail'; currentSub='net'; userSorted=false; applyDefaultSort(); viewList=getBaseList(); renderView();`);
+  const toCells = [...html('tableBody').matchAll(/<td class="num-cell">([\d.]+)%<\/td>/g)].map(m => num(m[1]));
+  ok('资金动向表把换手率渲染成「x.xx%」并用了等宽中性样式', toCells.length === 30, toCells.length + ' | ' + JSON.stringify(toCells.slice(0, 5)));
+  ok('表头有「换手率」列且带口径说明',
+     /title="[^"]*东财官方 f8 口径[^"]*"[^>]*>换手率/.test(html('tableHead')), html('tableHead').slice(0, 200));
+
+  // 按换手率排序：榜单内部（净流入 board）应为降序，且榜首 = 该 board 内换手最高
+  G(`sortCol='turnover'; sortAsc=false; viewList=getBaseList(); renderView();`);
+  const toSorted = [...html('tableBody').matchAll(/<td class="num-cell">([\d.]+)%<\/td>/g)].map(m => num(m[1]));
+  ok('点表头能按换手率降序（表格内 30 行单调不增）',
+     toSorted.length === 30 && toSorted.every((v, i) => i === 0 || v <= toSorted[i - 1] + 1e-9),
+     JSON.stringify(toSorted.slice(0, 8)));
+  ok('排序作用于整张榜单（榜首 = 榜单内换手最高，不是只排显示的 30 行）',
+     Math.abs(toSorted[0] - G(`(() => { const l = getBaseList(); return Math.max(...l.map(s => s.turnover || 0)); })()`)) < 0.005,
+     toSorted[0] + ' | ' + JSON.stringify(toSorted.slice(0, 3)));
+  G(`sortCol=null; sortAsc=false; applyDefaultSort();`);
+
+  // 速查面板
+  G(`panelMode = 'search'; quickLookup('600519');`);
+  const spHead = html('spHead');
+  ok('速查面板新增「换手率」列（在成交额之后）',
+     spHead.indexOf('换手率') >= 0 && spHead.indexOf('成交额') < spHead.indexOf('换手率'), spHead.slice(0, 260));
+  ok('速查面板的换手率 = 独立算出的值',
+     html('spBody').indexOf('>' + toExpect['600519'].toFixed(2) + '%<') >= 0,
+     toExpect['600519'] + ' | ' + html('spBody').slice(0, 300));
+  G(`closeStockPanel(); panelMode = null;`);
+
   /* ═══ 2. 占比列的显示细节 ═══ */
   console.log('\n=== 占比列 UI 细节 ===');
   G(`currentTab='dynamic'; currentFlow='retail'; currentSub='retail_ratio_top'; userSorted=false; forceCodes=[]; searchText=''; applyDefaultSort(); viewList = getBaseList(); renderView();`);
@@ -268,7 +321,11 @@ async function boot() {
   console.log('\n=== 回归 ===');
   G(`switchTab('flow'); currentFlow='retail'; currentSub='net'; userSorted=false; applyDefaultSort(); viewList=getBaseList(); renderView();`);
   const flowHead = html('tableHead');
-  ok('资金动向表仍 8 列', (flowHead.match(/<th /g) || []).length === 8, (flowHead.match(/<th /g) || []).length);
+  ok('资金动向表 9 列（新增换手率）', (flowHead.match(/<th /g) || []).length === 9, (flowHead.match(/<th /g) || []).length);
+  // ⚠️ 表头里有个 <span class="sort-icon"></span>（排序箭头），要先去干净再取标签
+  const flowLabels = [...flowHead.replace(/<span class="sort-icon"><\/span>/g, '').matchAll(/>([^<>]+)<\/th>/g)].map(m => m[1].trim());
+  ok('资金动向表列顺序 = 代码/名称/价格/涨跌/换手率/散户/中单/主力净额/行业',
+     flowLabels.join('/') === '代码/名称/价格/涨跌/换手率/散户净额/中单净额/主力净额/行业', flowLabels.join('/'));
   ok('资金动向表不出现占比单元格', html('tableBody').indexOf('ratio-num') < 0);
   ok('资金动向表仍渲染 30 行', (html('tableBody').match(/<tr>/g) || []).length === 30,
      (html('tableBody').match(/<tr>/g) || []).length);

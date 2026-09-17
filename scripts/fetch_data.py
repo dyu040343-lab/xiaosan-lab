@@ -178,7 +178,7 @@ def fetch_from_eastmoney():
                         "invt": 2,
                         "fid": "f62",
                         "fs": "m:0 t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048",
-                        "fields": "f12,f14,f2,f3,f6,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f100,f124,f38,f39",
+                        "fields": "f12,f14,f2,f3,f6,f8,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f100,f124,f38,f39",
                     }
                     data = _fetch_page(session, base_url, params)
                     items = data["data"].get("diff", [])
@@ -220,7 +220,7 @@ def fetch_from_eastmoney():
 
     # 字段映射: f62=主力净额, f184=主力净占比, f66=超大单净额, f69=超大单净占比,
     #          f72=大单净额, f75=大单净占比, f78=中单净额, f81=中单净占比,
-    #          f84=小单净额, f87=小单净占比, f124=5日涨跌,
+    #          f84=小单净额, f87=小单净占比, f124=5日涨跌, **f8=换手率(%)**,
     #          **f38=总股本, f39=流通A股（不含H股）** ← 这两个字段只在 clist/ulist 接口里是股本，
     #          在 stock/get 接口里 f84/f85 才是股本，语义随接口变，别混用
     #          ⚠️ f84 在本接口是「小单净额」，不是总股本
@@ -276,6 +276,11 @@ def fetch_from_eastmoney():
         else:
             dynamic_ratio = 0
 
+        # 换手率：东财官方 f8（%），与「成交额 ÷ 流通市值 × 100」实测完全一致
+        # （2026-09-17 校验：茅台 0.14/0.14、英联 16.82/16.81、中石油 0.07/0.07、金发 0.90/0.89）
+        # ⚠️ 别把 f8 和 f84 搞混：本接口里 f84 是「小单净额」
+        turnover = round(to_float(item.get("f8")), 2)
+
         # f100 = 东财行业板块名称（真实行业），为空或 "-" 时退回关键词猜测
         sector = str(item.get("f100") or "").strip()
         if not sector or sector == "-":
@@ -297,6 +302,7 @@ def fetch_from_eastmoney():
             "medium_pct": medium_pct,
             "small_pct": small_pct,
             "total_amount": total_amount,
+            "turnover": turnover,                        # 换手率（%，东财官方 f8）
             "dynamic_ratio": dynamic_ratio,
             "total_shares": to_float(item.get("f38")),   # 总股本（股）
             "circ_shares": to_float(item.get("f39")),    # 流通A股（股，不含H股）

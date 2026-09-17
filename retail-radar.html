@@ -923,6 +923,12 @@ td.code-cell { color: var(--dim); font-size: 10px; }
   transition: width 0.4s cubic-bezier(.22,1,.36,1);
 }
 
+/* 中性数值列（换手率等）：等宽 + 表格数字对齐，不带红绿 */
+.num-cell {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ═══ 自选星标 ═══ */
 .star-btn {
   display: inline-block;
@@ -1346,7 +1352,7 @@ td.col-highlight {background:#faf6f0;}
 ::selection {background:#e7cdb5;color:#18222c;}
 input {caret-color:var(--accent);}
 @media(max-width:1100px) {.container {padding:0 24px 24px;}.kpi-grid {grid-template-columns:1fr 1fr;row-gap:24px;}.kpi-card:nth-child(2) {border:0;}.kpi-card:nth-child(3) {padding-left:0;}.content {grid-template-columns:minmax(220px,.7fr) minmax(0,1.5fr);}.search-bar {margin-left:0;}.kpi-value {font-size:27px;}}
-@media(max-width:760px) {.container {padding:0 16px 24px;}.prototype-notice {padding:6px 16px;}.prototype-notice span {font-size:10px;}.header {align-items:flex-start;flex-direction:column;gap:16px;padding:20px 0;}.header-right {justify-content:flex-start;}.tool-bar {margin-bottom:24px;}.quick-wrap {padding:0 9px;}.quick-icon {padding-right:8px;font-size:11px;}.quick-input {font-size:12px;}.btn-watch {padding:0 10px;font-size:12px;}.section-header {align-items:flex-start;flex-direction:column;gap:6px;}.kpi-card {padding:0 14px;}.kpi-value {font-size:23px;}.kpi-sub {font-size:9px;white-space:normal;}.kpi-label-tag {display:none;}.kpi-grid {padding:18px 0;row-gap:24px;}.kpi-card.share .kpi-value {gap:6px;flex-wrap:wrap;}#kpiShareValue>span {max-width:none;display:block;}#kpiShareValue b {font-size:12px;}.research-tools {gap:10px;}.search-bar {width:100%;max-width:none;}.content {display:flex;flex-direction:column;gap:20px;}.content>.table-box {order:-1;height:460px;}.chart-box {height:340px;}.subtab,.subtab-flow .subtab {padding:6px 10px;}.table-box table {min-width:690px;}.chip-box table {min-width:860px;}.quick-wrap {min-width:0;}.stock-panel-head {gap:8px;}.footer-meta {align-items:flex-start;}}
+@media(max-width:760px) {.container {padding:0 16px 24px;}.prototype-notice {padding:6px 16px;}.prototype-notice span {font-size:10px;}.header {align-items:flex-start;flex-direction:column;gap:16px;padding:20px 0;}.header-right {justify-content:flex-start;}.tool-bar {margin-bottom:24px;}.quick-wrap {padding:0 9px;}.quick-icon {padding-right:8px;font-size:11px;}.quick-input {font-size:12px;}.btn-watch {padding:0 10px;font-size:12px;}.section-header {align-items:flex-start;flex-direction:column;gap:6px;}.kpi-card {padding:0 14px;}.kpi-value {font-size:23px;}.kpi-sub {font-size:9px;white-space:normal;}.kpi-label-tag {display:none;}.kpi-grid {padding:18px 0;row-gap:24px;}.kpi-card.share .kpi-value {gap:6px;flex-wrap:wrap;}#kpiShareValue>span {max-width:none;display:block;}#kpiShareValue b {font-size:12px;}.research-tools {gap:10px;}.search-bar {width:100%;max-width:none;}.content {display:flex;flex-direction:column;gap:20px;}.content>.table-box {order:-1;height:460px;}.chart-box {height:340px;}.subtab,.subtab-flow .subtab {padding:6px 10px;}.table-box table {min-width:750px;}.chip-box table {min-width:860px;}.quick-wrap {min-width:0;}.stock-panel-head {gap:8px;}.footer-meta {align-items:flex-start;}}
 @media(prefers-reduced-motion:reduce) {*,*::before,*::after {animation:none!important;transition:none!important;scroll-behavior:auto!important;}}
 
 
@@ -1725,11 +1731,25 @@ async function loadData() {
   }
 }
 
+/* 换手率：东财官方 f8（后端已写进 turnover 字段）。
+   ⚠️ 数据是 10 分钟一版，后端刚上线时手上可能还是「没有 turnover 的旧版数据」——
+   所以在这里兜底换算一次（成交额 ÷ 流通市值 × 100，实测与东财 f8 完全一致：
+   茅台 0.14/0.14、英联 16.82/16.81、中石油 0.07/0.07）。
+   补齐后全站（两个表 + 速查面板 + 排序）用的是同一份值，不会各算一套。*/
+function ensureTurnover() {
+  for (const s of (allData?.retail_flow || [])) {
+    if (s.turnover !== undefined && s.turnover !== null) continue;
+    const mcap = (s.circ_shares || 0) / 1e8 * (s.price || 0);   // 流通市值（亿元）
+    s.turnover = mcap > 0 ? Math.round((s.total_amount || 0) / mcap * 100 * 100) / 100 : null;
+  }
+}
+
 async function fetchData() {
   try {
     allData = await loadData();
     _universe = null;   // 数据刷新后重建「全市场指标索引」
     _ffMcap = null;     // 同时重建占比分母表（自由流通市值）
+    ensureTurnover();   // 换手率兜底（旧数据没有该字段时现算）
     render();
     return true;
   } catch(e) {
@@ -1945,6 +1965,13 @@ function renderChart(stocks, primaryField) {
   document.getElementById('chartArea').innerHTML = html;
 }
 
+// 换手率单元格：非方向性指标，用中性色 + 等宽数字（红绿留给涨跌/资金）
+function turnoverTd(s) {
+  const v = s.turnover;
+  if (v === null || v === undefined) return '<td style="color:var(--dim)">--</td>';
+  return '<td class="num-cell">' + v.toFixed(2) + '%</td>';
+}
+
 // 占比单元格：数字 + 迷你条（条长 = |占比| ÷ 本榜最大，满格见图表标题；算不出分母显示 --）
 function ratioTd(s) {
   const v = s._ratio;
@@ -1959,12 +1986,14 @@ function ratioTd(s) {
 
 function renderTable(stocks, primaryField, offScope) {
   const isDynamic = currentTab === 'dynamic';
-  // 价格 / 涨跌两列紧跟「名称」之后，方便一眼看到实时行情
+  // 价格 / 涨跌 / 换手率 三列紧跟「名称」之后，方便一眼看到实时行情与活跃度
   const cols = isDynamic ? [
     {key: 'code', label: '代码'},
     {key: 'name', label: '名称'},
     {key: 'price', label: '价格'},
     {key: 'change_pct', label: '涨跌'},
+    {key: 'turnover', label: '换手率',
+     tip: '成交额 ÷ 流通市值 × 100%（东财官方 f8 口径）。筹码转手活跃度：低于 1% 属清淡、1–3% 属正常、高于 10% 属高换手'},
     {key: 'retail_net', label: '散户净额'},
     {key: 'medium_net', label: '中单净额'},
     {key: 'main_net', label: '主力净额'},
@@ -1980,6 +2009,8 @@ function renderTable(stocks, primaryField, offScope) {
     {key: 'name', label: '名称'},
     {key: 'price', label: '价格'},
     {key: 'change_pct', label: '涨跌'},
+    {key: 'turnover', label: '换手率',
+     tip: '成交额 ÷ 流通市值 × 100%（东财官方 f8 口径）。筹码转手活跃度：低于 1% 属清淡、1–3% 属正常、高于 10% 属高换手'},
     {key: 'retail_net', label: '散户净额'},
     {key: 'medium_net', label: '中单净额'},
     {key: 'main_net', label: '主力净额'},
@@ -1987,7 +2018,7 @@ function renderTable(stocks, primaryField, offScope) {
   ];
   // 当前资金视角列高亮（仅资金动向 tab；占比 tab 的 primaryField 恒为 retail_net，不参与高亮）
   const hlKey = (currentTab === 'flow') ? primaryField : null;
-  const ncols = isDynamic ? 9 : 8;
+  const ncols = isDynamic ? 10 : 9;
   let headHtml = '<tr>' + cols.map(c => {
     let cls = 'sortable';
     if (sortCol === c.key) cls += sortAsc ? ' sort-asc' : ' sort-desc';
@@ -2009,6 +2040,7 @@ function renderTable(stocks, primaryField, offScope) {
         + (offScope ? '<span class="off-scope" title="不在本榜单口径内，是你要求单独显示的">口径外</span>' : '') + '</td>' +
       '<td class="' + cls + '">' + (s.price > 0 ? s.price.toFixed(2) : '--') + '</td>' +
       '<td class="' + cls + '">' + (s.change_pct ? (s.change_pct > 0 ? '+' : '') + s.change_pct.toFixed(2) + '%' : '--') + '</td>' +
+      turnoverTd(s) +
       '<td' + isHL('retail_net') + ' style="color:' + (r >= 0 ? 'var(--red)' : 'var(--green)') + ';font-weight:600">' + (r >= 0 ? '+' : '') + r.toFixed(2) + '</td>' +
       '<td' + isHL('medium_net') + ' style="color:' + (m >= 0 ? 'var(--red)' : 'var(--green)') + ';font-weight:600">' + (m >= 0 ? '+' : '') + m.toFixed(2) + '</td>' +
       '<td' + isHL('main_net') + ' style="color:' + mainColor + '">' + (mn >= 0 ? '+' : '') + mn.toFixed(2) + '</td>' +
@@ -2350,6 +2382,7 @@ const SP_COLS = [
   {key:'price',        label:'价格'},
   {key:'change_pct',   label:'涨跌'},
   {key:'total_amount', label:'成交额', tip:'当日成交额（亿元）'},
+  {key:'turnover',     label:'换手率', tip:'成交额 ÷ 流通市值 × 100%（东财官方 f8 口径）。筹码转手活跃度：<1% 清淡、1–3% 正常、>10% 高换手。与「成交额」的区别：成交额是今天动了多少钱，换手率是相当于多大比例的盘子换了手，因此不同盘子的股票之间可比'},
   {key:'ff_mcap',      label:'自由流通市值', tip:'流通A股 × 现价 × 自由流通比例（亿元）。占比榜的分母 —— 用它而不是流通市值，因为锁定盘不参与日常博弈'},
   {key:'retail_net',   label:'散户净额', tip:'小单净额（亿元）。散户（小单）净买入为正'},
   {key:'medium_net',   label:'中单净额', tip:'中单净额（亿元）'},
@@ -2853,6 +2886,8 @@ function spCell(s, key) {
     }
     case 'total_amount':
       return '<td>' + (NULLISH(s.total_amount) ? '--' : s.total_amount.toFixed(2) + '<span style="color:var(--dimmer);font-size:10px">亿</span>') + '</td>';
+    case 'turnover':
+      return NULLISH(s.turnover) ? '<td style="color:var(--dim)">--</td>' : '<td class="num-cell">' + s.turnover.toFixed(2) + '%</td>';
     case 'retail_net':
     case 'medium_net': {
       const v = s[key];

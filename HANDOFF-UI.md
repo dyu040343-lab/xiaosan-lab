@@ -81,6 +81,8 @@ medium_net  中单净额(亿)   ← 「中单」
 main_net    超大单+大单净额(亿) ← 「主力」
 super_net large_net small_net super_pct large_pct medium_pct small_pct
 total_amount  成交额(亿)   ← 流动性过滤用它（不再做占比分母）
+turnover      换手率(%)    ← 东财官方 f8，等价于 total_amount ÷ 流通市值 × 100（实测完全一致）。
+                 ⚠️ 前端 `ensureTurnover()` 会兜底：老数据没有该字段时按上式现算，保证全站同一份值
 dynamic_ratio = retail_net / total_amount × 100   ← ⚠️ 旧口径，前端已不再使用（字段保留在 JSON 里）
 circ_shares / total_shares  流通A股 / 总股本（股）；配合现价与筹码表 float_ratio 算「自由流通市值」
 ⚠️ 占比的分母由前端算：ff_mcap = circ_shares/1e8 × price × float_ratio/100（亿元）
@@ -195,7 +197,7 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 .header                      顶栏：状态徽章 / 数据时间（数据时间 xx:xx:xx · 10 分钟一更）/ 刷新按钮 / 自动刷新开关
 .kpi-card.share                「资金构成占比」卡：三档标签 + 数字 + 三色堆叠条。⚠️ 数字与 `%` 必须在同一个 flex 行（`#kpiShareValue .share-num`）—— `<b>` 一旦写成 `display:block`，紧跟其后的裸文本 `%` 会被拆到下一行（2026-09-17 用户截图反馈）
 .tool-bar                    个股速查输入框 + ★ 自选按钮
-.stock-panel (#stockPanel)   速查/自选 共用的「全指标表」面板（20 列）
+.stock-panel (#stockPanel)   速查/自选 共用的「全指标表」面板（21 列）
 #realtime                    KPI 4 卡 + tab 栏 + subtab + 搜索框 + 图表 + 表格
 #chipBox / 筹码区             筹码动向可排序表（9 列）
 .compliance-footer           免责声明 / 页脚
@@ -209,6 +211,7 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 | `dataTimeLabel()` / `nextUpdateHint()` / `tickFlash()` / `DATA_INTERVAL_MIN` | 「数据时间 · 10 分钟一更」文案 + 下一版时间提示 + 换版闪烁。**别删**（详见禁令 16–18） |
 | `getBaseList()` / `applyDefaultSort()` / `renderView()` | 榜单：filter / 设排序 / 渲染 |
 | `matchSearch()` / `filterTable()` / `clearListFilter()` / `updateFilterChip()` | 榜单内筛选（扫整张榜单，同时作用于图表与表格）+ 常驻筛选状态 chip |
+| `ensureTurnover()` / `turnoverTd()` | 换手率（东财 f8）：装载数据后兜底补齐 + 表格单元格渲染（中性色 `.num-cell`，非方向性指标不用红绿） |
 | `emptyStateHTML()` / `quickLookup()` / `boardForStock()` / `forceShow()` / `ensureRatio()` / `LIQUIDITY_MIN` | 空态诊断（哪条规则挡的）+ 一键动作；「口径外」显示通道 |
 | `ffMcapMap()` / `ffMcapOf()` / `ratioOf()` / `ratioTier()` | **占比口径唯一实现**：自由流通市值分母。`ratioOf` 返回 `null` = 算不出分母 |
 | `ratioTd()` / `ratioColor()` / `ratioBarPct()` / `computeRatioScale()` / `ratioScale` / `ratioScaleText()` | 占比列显示层：数字 + 迷你条（`.ratio-num` / `.ratio-bar` / `.ratio-fill`）。条长 = \|占比\| ÷ 本榜最大、非零值最小 6% 宽；正值红（主力蓝）、负值绿。**改它要连 `renderChart` 的 dynamic 分支一起改（共用 `ratioScale`）** |
@@ -219,7 +222,7 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 | `toggleChipHelp()` | 筹码表「口径说明」折叠面板 |
 | `renderChart(stocks, field)` | 条形图（DOM 实现）。⚠️ 占比 tab 的 `maxVal` 必须取 `ratioScale`，与表格同一基准 |
 | `renderSubtabs()` / `switchTab()` | tab / subtab 切换。⚠️ `switchTab` **不许再用隐式全局 `event.target`**（只在 onclick 派发期间存在，程序化调用必炸，2026-09-17 踩到），要按传入的 `tab` 找 active 项 |
-| `renderTable(stocks, field)` | 榜单表格（8 列，含 ☆） |
+| `renderTable(stocks, field)` | 榜单表格（资金动向 9 列 / 占比 10 列，含 ☆ 与换手率） |
 | `renderChipFlow()` / `chipSortTable(col)` / `toggleChipHelp()` | 筹码表（9 列，默认按户数变化升序，只渲染前 `CHIP_RENDER_LIMIT`=30 行） |
 | `renderSubtabs()` / `switchTab()` / `switchFlowTab()` / `switchSub()` / `sortTable()` | tab 与排序交互 |
 | `universe()` | 把 `retail_flow` × `chip_flow.rows` 按 code 合并成全指标 Map（速查/自选的数据源） |
@@ -247,8 +250,8 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 
 ## 8. 已知可优化点（方向建议，供参考）
 
-- **移动端**：断点只有 `max-width: 768px` 一个，8–20 列表格在手机上只能横向硬滚；可考虑卡片式/分组折叠。
-- **20 列速查面板**：横向滚动时缺少列分组视觉提示（行情/资金/筹码三块），容易看错列。
+- **移动端**：断点只有 `max-width: 768px` 一个，9–21 列表格在手机上只能横向硬滚；可考虑卡片式/分组折叠。
+- **21 列速查面板**：横向滚动时缺少列分组视觉提示（行情/资金/筹码三块），容易看错列。
 - **数字对齐**：金额/百分比列建议统一右对齐 + 等宽字体，便于纵向比大小。
 - **视觉层级**：KPI 卡 / 图表 / 表格三层信息密度接近，主次可再拉开（字号、留白、分隔）。
 - **可访问性**：列头口径说明只用了 `title`（移动端和键盘用户看不到）；sticky 表头没有 `aria-sort`。
