@@ -193,6 +193,7 @@ Loading Skeleton 1040 · Responsive 1060 · 合规子页 1068
 ### 页面区块（`<body>` 内）
 ```
 .header                      顶栏：状态徽章 / 数据时间（数据时间 xx:xx:xx · 10 分钟一更）/ 刷新按钮 / 自动刷新开关
+.kpi-card.share                「资金构成占比」卡：三档标签 + 数字 + 三色堆叠条。⚠️ 数字与 `%` 必须在同一个 flex 行（`#kpiShareValue .share-num`）—— `<b>` 一旦写成 `display:block`，紧跟其后的裸文本 `%` 会被拆到下一行（2026-09-17 用户截图反馈）
 .tool-bar                    个股速查输入框 + ★ 自选按钮
 .stock-panel (#stockPanel)   速查/自选 共用的「全指标表」面板（20 列）
 #realtime                    KPI 4 卡 + tab 栏 + subtab + 搜索框 + 图表 + 表格
