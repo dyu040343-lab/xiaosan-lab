@@ -110,6 +110,8 @@ curl -sk https://127.0.0.1/retail-radar.html -H 'Host: xiaosanlab.online' -o /de
 ## 5. 数据口径速查（改前端前必读，详版见 HANDOFF-UI.md）
 
 - **三档（资金维度）**：散户 = 小单净额、中单 = 中单净额、主力 = 超大单 + 大单；**三者净额之和恒等于 0**。
+- **量价字段**（2026-09-17 接入，供 Tab3「放量滞涨」）：`vol_ratio`(f10 量比) · `chg_60d`(f24 60日涨跌幅) ·
+  `chg_ytd`(f25 年初至今) · `list_date`(f26 上市日期)；`_vp`(量价分) 是前端算的，不落盘
 - **换手率**：`turnover`（%，东财官方 `f8`，2026-09-17 接入）。等价于 `total_amount ÷ (流通A股 × 现价) × 100`；
   前端 `ensureTurnover()` 对没有该字段的旧数据按上式兜底现算，所以**后端没升级也不会显示空**
 - **占比维度**：`dynamic_ratio = retail_net / total_amount × 100`，**必须保留 `LIQUIDITY_MIN`（5 亿）流动性过滤**，
