@@ -413,8 +413,19 @@ async function boot() {
     G(`searchText = ''; forceCodes = []; sortCol = null; userSorted = false; applyDefaultSort(); viewList = getBaseList(); renderView();`);
     const vsHead = html('tableHead');
     const vsLabels = [...vsHead.replace(/<span class="sort-icon"><\/span>/g, '').matchAll(/>([^<>]+)<\/th>/g)].map(m => m[1].trim());
-    ok('表格 11 列且顺序正确',
-       vsLabels.join('/') === '代码/名称/价格/今日涨跌/换手率/量比/60日涨幅/年初至今/量价分/主力净额/行业', vsLabels.join('/'));
+    ok('表格 11 列且顺序正确（换手率已挪到名称之后）',
+       vsLabels.join('/') === '代码/名称/换手率/价格/今日涨跌/量比/60日涨幅/年初至今/量价分/主力净额/行业', vsLabels.join('/'));
+    // 🩸 挪列序最容易只改表头忘了改行 → 列错位。这里逐格核对第 1 行
+    const row0 = html('tableBody').split('</tr>')[0];
+    const tds0 = [...row0.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map(m => m[1]);
+    const txt0 = (i) => tds0[i].replace(/<[^>]*>/g, '').trim();
+    const lead = ranked[0];
+    ok('第 1 行格子数 = 表头列数（没错位）', tds0.length === 11, tds0.length + ' 格');
+    ok('★ 换手率是「名称」之后的第一列（第 3 格 = 换手率值）',
+       txt0(2) === (lead.turnover === null || lead.turnover === undefined ? '--' : lead.turnover.toFixed(2) + '%'),
+       txt0(2) + ' vs 数据 ' + lead.turnover);
+    ok('价格 / 今日涨跌 顺次跟在换手率之后',
+       txt0(3) === (lead.price > 0 ? lead.price.toFixed(2) : '--'), txt0(3) + ' | ' + txt0(4));
     ok('默认按量价分降序', G('sortCol') === '_vp' && G('sortAsc') === false, G('sortCol') + '/' + G('sortAsc'));
     // ⚠️ 用宿主侧字符串做 matchAll：在 vm 里对 vm 字符串跑 matchAll 会拿到空结果（踩过）
     const rendered = [...html('tableBody').matchAll(/data-star="(\d{6})"/g)].map(m => m[1]);

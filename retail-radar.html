@@ -2126,9 +2126,9 @@ function volspanRow(s, offScope) {
     '<td class="code-cell">' + s.code + '</td>' +
     '<td class="name-cell">' + starBtn(s.code) + s.name
       + (offScope ? '<span class="off-scope" title="不在本榜单口径内，是你要求单独显示的">口径外</span>' : '') + '</td>' +
+    turnoverTd(s) +
     '<td class="' + cls + '">' + (s.price > 0 ? s.price.toFixed(2) : '--') + '</td>' +
     '<td class="' + cls + '">' + (s.change_pct ? (s.change_pct > 0 ? '+' : '') + s.change_pct.toFixed(2) + '%' : '--') + '</td>' +
-    turnoverTd(s) +
     '<td class="num-cell">' + (vr === null || vr === undefined ? '--' : vr.toFixed(2)) + '</td>' +
     pctSignCell(s.chg_60d) +
     pctSignCell(s.chg_ytd) +
@@ -2164,10 +2164,11 @@ function renderTable(stocks, primaryField, offScope) {
   const cols = isVolspan ? [
     {key: 'code', label: '代码'},
     {key: 'name', label: '名称'},
-    {key: 'price', label: '价格'},
-    {key: 'change_pct', label: '今日涨跌'},
+    // 换手率提到最前：本榜第一眼要看的就是「活跃度」，价格是第二眼的确认
     {key: 'turnover', label: '换手率',
      tip: '东财官方换手率（成交量 ÷ 流通股本）。绝对活跃度；次新/小盘票天然偏高，所以还要配「量比」一起看'},
+    {key: 'price', label: '价格'},
+    {key: 'change_pct', label: '今日涨跌'},
     {key: 'vol_ratio', label: '量比',
      tip: '当日每分钟均量 ÷ 前 5 日每分钟均量（东财 f10）。相对自己的放量倍数：1 = 与平时持平，2 = 放量一倍。这是「今天有资金在动」的核心证据'},
     {key: 'chg_60d', label: '60日涨幅',
