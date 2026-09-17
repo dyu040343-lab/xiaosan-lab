@@ -224,27 +224,31 @@ async function boot() {
   ok('有价有流通盘的股票都算出了 turnover',
      G(`allData.retail_flow.filter(s => s.price > 0 && s.circ_shares > 0).every(s => s.turnover !== null && s.turnover !== undefined)`),
      G(`(() => { const b = allData.retail_flow.filter(s => s.price > 0 && s.circ_shares > 0 && (s.turnover === null || s.turnover === undefined)); return b.length + ' 只缺失 ' + JSON.stringify(b.slice(0,3).map(s=>s.code)); })()`));
-  ok('没价/没流通盘的（退市整理、停牌）显示 -- 而不是 0',
-     G(`allData.retail_flow.filter(s => !s.price || !s.circ_shares).every(s => s.turnover === null)`),
-     G(`allData.retail_flow.filter(s => !s.price).length + ' 只无价（如退市/停牌）'`));
-  ok('兜底换算值与「成交额 ÷ 流通市值」完全一致（抽查 200 只）', (() => {
-    const rows = G('allData.retail_flow.slice(0, 200)');
-    const bad = rows.filter(s => toExpect[s.code] !== null && Math.abs(s.turnover - toExpect[s.code]) > 0.011);
+  ok('兜底路径下，没价/没流通盘（退市整理、停牌）的算不出 → null（不是 0）', (() => {
+    G(`allData.retail_flow.forEach(s => { delete s.turnover; }); ensureTurnover();`);
+    const nulls = G(`allData.retail_flow.filter(s => !s.price || !s.circ_shares).every(s => s.turnover === null)`);
+    G(`allData.retail_flow.forEach(s => { delete s.turnover; }); ensureTurnover();`);
+    return nulls;
+  })(), G(`allData.retail_flow.filter(s => !s.price).length + ' 只无价（如退市/停牌）'`));
+  // 强制走兜底路径（先删掉官方 f8）来验证公式本身，与数据里有没有 f8 无关
+  ok('兜底换算 = 成交额 ÷ 流通市值 × 100（抽查 300 只）', (() => {
+    const rows = G('allData.retail_flow.slice(0, 300)');
+    const bad = rows.filter(s => toExpect[s.code] !== null && s.turnover !== null && Math.abs(s.turnover - toExpect[s.code]) > 0.011);
     return bad.length === 0;
+  })(), (() => {
+    const rows = G('allData.retail_flow.slice(0, 300)');
+    return JSON.stringify(rows.filter(s => toExpect[s.code] !== null && s.turnover !== null && Math.abs(s.turnover - toExpect[s.code]) > 0.011).slice(0, 3).map(s => [s.code, s.turnover, toExpect[s.code]]));
   })());
-  ok('已有官方 f8 时不被覆盖（数据里带 turnover 就用它）', (() => {
-    G('allData.retail_flow[0].turnover = 99.99; ensureTurnover();');
-    const keep = G('allData.retail_flow[0].turnover') === 99.99;
-    delete G('allData.retail_flow[0]').turnover;
-    G('ensureTurnover();');
-    return keep && Math.abs(G('allData.retail_flow[0].turnover') - toExpect[G('allData.retail_flow[0].code')]) < 0.011;
+  ok('官方值不会被兜底覆盖（哨兵值验证）', (() => {
+    G(`allData.retail_flow[0].turnover = 12.34; ensureTurnover();`);
+    return G('allData.retail_flow[0].turnover') === 12.34;
   })());
 
   G(`switchTab('flow'); currentFlow='retail'; currentSub='net'; userSorted=false; applyDefaultSort(); viewList=getBaseList(); renderView();`);
   const toCells = [...html('tableBody').matchAll(/<td class="num-cell">([\d.]+)%<\/td>/g)].map(m => num(m[1]));
   ok('资金动向表把换手率渲染成「x.xx%」并用了等宽中性样式', toCells.length === 30, toCells.length + ' | ' + JSON.stringify(toCells.slice(0, 5)));
   ok('表头有「换手率」列且带口径说明',
-     /title="[^"]*东财官方 f8 口径[^"]*"[^>]*>换手率/.test(html('tableHead')), html('tableHead').slice(0, 200));
+     /title="[^"]*东财官方换手率[^"]*"[^>]*>换手率/.test(html('tableHead')), html('tableHead').slice(0, 200));
 
   // 按换手率排序：榜单内部（净流入 board）应为降序，且榜首 = 该 board 内换手最高
   G(`sortCol='turnover'; sortAsc=false; viewList=getBaseList(); renderView();`);

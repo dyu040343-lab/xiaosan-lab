@@ -1733,8 +1733,10 @@ async function loadData() {
 
 /* 换手率：东财官方 f8（后端已写进 turnover 字段）。
    ⚠️ 数据是 10 分钟一版，后端刚上线时手上可能还是「没有 turnover 的旧版数据」——
-   所以在这里兜底换算一次（成交额 ÷ 流通市值 × 100，实测与东财 f8 完全一致：
-   茅台 0.14/0.14、英联 16.82/16.81、中石油 0.07/0.07）。
+   所以在这里兜底换算一次：换手率 ≈ 成交额 ÷ 流通市值 × 100。
+   注意这只是**近似**：东财真实口径是「成交量 ÷ 流通股本」，成交价全天变动时会有偏差
+   （全市场中位差仅 0.01pp，但新股/暴涨暴跌股能差几十个百分点 —— 如 N沈鼓 官方 79.62% vs 近似 49.66%）。
+   所以**数据里带 f8 时一律用 f8**，只有旧数据才走这个近似。
    补齐后全站（两个表 + 速查面板 + 排序）用的是同一份值，不会各算一套。*/
 function ensureTurnover() {
   for (const s of (allData?.retail_flow || [])) {
@@ -1993,7 +1995,7 @@ function renderTable(stocks, primaryField, offScope) {
     {key: 'price', label: '价格'},
     {key: 'change_pct', label: '涨跌'},
     {key: 'turnover', label: '换手率',
-     tip: '成交额 ÷ 流通市值 × 100%（东财官方 f8 口径）。筹码转手活跃度：低于 1% 属清淡、1–3% 属正常、高于 10% 属高换手'},
+     tip: '东财官方换手率（成交量 ÷ 流通股本）。筹码转手活跃度：低于 1% 属清淡、1–3% 属正常、高于 10% 属高换手'},
     {key: 'retail_net', label: '散户净额'},
     {key: 'medium_net', label: '中单净额'},
     {key: 'main_net', label: '主力净额'},
@@ -2010,7 +2012,7 @@ function renderTable(stocks, primaryField, offScope) {
     {key: 'price', label: '价格'},
     {key: 'change_pct', label: '涨跌'},
     {key: 'turnover', label: '换手率',
-     tip: '成交额 ÷ 流通市值 × 100%（东财官方 f8 口径）。筹码转手活跃度：低于 1% 属清淡、1–3% 属正常、高于 10% 属高换手'},
+     tip: '东财官方换手率（成交量 ÷ 流通股本）。筹码转手活跃度：低于 1% 属清淡、1–3% 属正常、高于 10% 属高换手'},
     {key: 'retail_net', label: '散户净额'},
     {key: 'medium_net', label: '中单净额'},
     {key: 'main_net', label: '主力净额'},
