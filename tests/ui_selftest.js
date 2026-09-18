@@ -496,6 +496,25 @@ async function boot() {
     while ((m = re.exec(HTML))) { d += m[0] === '</div>' ? -1 : 1; if (d === 0) { k = m.index + m[0].length; break; } }
     return HTML.slice(i, k).indexOf('id="stockPanel"') >= 0;
   })());
+  // ── 面板两种形态：自选=文档流（不遮挡），速查=浮层（打字不动）──
+  //   2026-09-18 反馈「自选会覆盖掉原有 ui」：浮层把 4 张 KPI 卡整个盖掉，
+  //   所以自选必须回到文档流；但速查不能回到文档流（否则打字时内容乱跳）。
+  G(`watchlist = ['600519','000001']; openWatchPanel();`);
+  ok('自选面板走文档流（挂上 .panel-flow）',
+     G(`document.getElementById('stockPanel').classList.contains('panel-flow')`));
+  ok('★ .panel-flow 是静态定位 + 整行撑开（不遮挡 KPI/图表）',
+     /\.stock-panel\.panel-flow\s*\{[^}]*position:\s*static[^}]*flex:\s*0 0 100%/s.test(HTML));
+  ok('.tool-bar 允许换行（自选面板才能独占一整行）', /\.tool-bar\s*\{[^}]*flex-wrap:\s*wrap/s.test(HTML));
+  ok('★ .panel-flow 不设 max-height（否则会把自己裁掉一截）',
+     /\.stock-panel\.panel-flow\s*\{[^}]*max-height:\s*none/s.test(HTML));
+  G(`closeStockPanel(); document.getElementById('quickInput').value = '60'; onQuickInput();`);
+  ok('速查面板仍是浮层（绝对定位 + 不带 .panel-flow）',
+     !G(`document.getElementById('stockPanel').classList.contains('panel-flow')`)
+       && /\.stock-panel\s*\{[^}]*position:\s*absolute/s.test(HTML));
+  G(`openWatchPanel(); closeStockPanel();`);
+  ok('关闭面板会摘掉 .panel-flow（下次打开按模式重判）',
+     !G(`document.getElementById('stockPanel').classList.contains('panel-flow')`));
+
   ok('取数仍走条件请求（URL 无 ?t=）',
      calls.filter((c) => c.url.indexOf('radar_data') >= 0).every((c) => c.url.indexOf('?t=') < 0),
      JSON.stringify(calls.filter((c) => c.url.indexOf('radar_data') >= 0).slice(0, 1)));

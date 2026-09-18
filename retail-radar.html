@@ -1465,12 +1465,16 @@ button:focus-visible,.tab:focus-visible,.subtab:focus-visible {outline:3px solid
 .title-block h1 {font-weight:600;letter-spacing:.6px;}
 .title-block .subtitle {display:block;font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:9px;font-weight:500;letter-spacing:1.8px;color:var(--dim);margin-top:3px;}
 @media(max-width:420px) {.logo-wrap {width:38px;height:38px;flex-basis:38px;}.header-left {gap:10px;}}
-/* ── 速查/自选面板做成浮层 ─────────────────────────────────────────
-   原来它在 DOM 里排在 .tool-bar 之前，每敲一个字面板一显示就把输入框往下顶，
-   表现为"打字时输入框动来动去"（2026-09-16 反馈）。改成绝对定位浮层后
-   不再参与文档流，输入框纹丝不动。body 在 1218 行已把 overflow-x 改为 visible，
-   不会有裁剪问题。 ─────────────────────────────────────────────── */
-.tool-bar { position: relative; }
+/* ── 速查/自选面板：两种形态，按面板模式切 ──────────────────────────
+   · 速查（panelMode='search'）：浮层。原来它在 DOM 里排在 .tool-bar 之前，
+     每敲一个字面板一显示就把输入框往下顶，表现为"打字时输入框动来动去"
+     （2026-09-16 反馈）。改成绝对定位浮层后不参与文档流，输入框纹丝不动。
+   · 自选（panelMode='watch'）：文档流内展开（下方 .panel-flow）。
+     2026-09-18 反馈"自选会覆盖掉原有 ui" —— 浮层把 4 张 KPI 卡整个盖掉、
+     底部还半遮着图表和榜单。自选是"打开慢慢看"的场景，改成撑开下推，
+     一个像素都不盖：输入框在面板上方，所以它依然不动。
+   body 在 1218 行已把 overflow-x 改为 visible，不会有裁剪问题。 ─────── */
+.tool-bar { position: relative; flex-wrap: wrap; }   /* 换行 = 给自选面板腾出整行 */
 .stock-panel {
   position: absolute;
   top: calc(100% + 8px);
@@ -1484,6 +1488,14 @@ button:focus-visible,.tab:focus-visible,.subtab:focus-visible {outline:3px solid
   overflow: hidden;
 }
 .stock-panel .wide-box { max-height: 62vh; }
+/* 自选面板：回到文档流，整行撑开，绝不遮挡 */
+.stock-panel.panel-flow {
+  position: static;
+  flex: 0 0 100%;
+  max-height: none;          /* 高度交给 .wide-box 限（否则会把自己裁掉一截） */
+  margin-top: 8px;
+}
+.stock-panel.panel-flow .wide-box { max-height: 58vh; }
 @media (max-width: 760px) { .btn-account { padding: 6px 10px; font-size: 11px; } }
 .sp-btn.primary { border-color: var(--accent-dim); color: var(--accent); }
 .sp-account {
@@ -1503,6 +1515,7 @@ button:focus-visible,.tab:focus-visible,.subtab:focus-visible {outline:3px solid
 @media (max-width: 760px) {
   .stock-panel { max-height: 70vh; }
   .stock-panel .wide-box { max-height: 56vh; }
+  .stock-panel.panel-flow .wide-box { max-height: 50vh; }
 }
 </style>
 </head>
@@ -3015,7 +3028,10 @@ function closeStockPanel() {
   panelMode = null;
   spRows = [];
   const p = document.getElementById('stockPanel');
-  if (p) p.style.display = 'none';
+  if (p) {
+    p.style.display = 'none';
+    p.classList.remove('panel-flow');   // 关掉就别再占着整行（下次打开按模式重新判）
+  }
   updateWatchCount();
 }
 function refreshPanel() {
@@ -3039,6 +3055,8 @@ function drawStockPanel(title, note) {
   const panel = document.getElementById('stockPanel');
   if (!panel) return;
   panel.style.display = '';
+  // 自选 → 文档流内撑开（不遮挡 KPI/图表）；速查 → 浮层（打字时输入框不动）
+  panel.classList.toggle('panel-flow', panelMode === 'watch');
   document.getElementById('spTitle').textContent = title || '';
   // 说明文案要显示出来：原来这里直接清空，等于 note 参数被丢掉（顺带修回）
   const noteEl = document.getElementById('spNote');
