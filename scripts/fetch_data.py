@@ -168,15 +168,25 @@ def fetch_from_eastmoney():
             total_pages = 1
             expected_total = 0
             try:
+                # 已抓到的代码集合：分页漂移的兜底，也是"完成度"的真相来源
+                seen_codes = set()
                 while page <= total_pages:
                     params = {
                         "pn": page,
+                        # ⚠️ 实测服务端会把 pz 压到 100（传 5000 也只回 100）→
+                        #    全市场 ~5900 只要打 60 页，分页期间"顺序稳定性"是生死线
                         "pz": 5000,
-                        "po": 1,
+                        "po": 0,          # 0 = 升序
                         "np": 1,
                         "fltt": 2,
                         "invt": 2,
-                        "fid": "f62",
+                        # 🩸 fid 必须用**与盘中变化无关**的字段排序（f12 = 证券代码）。
+                        #    原来用 f62（主力净额）：盘中每次请求之间排序都在变，
+                        #    60 页打下来的边界漂移 = 有的票重复抓、有的票整只漏掉。
+                        #    2026-09-18 实测：5917 行里 183 个代码重复、180 只整只漏掉，
+                        #    用户报的「凯盛科技 600552 没数据」就是被漏掉的其中之一
+                        #    （东财侧它一直正常交易：10.4 亿成交额、6.25% 换手）。
+                        "fid": "f12",
                         "fs": "m:0 t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048",
                         "fields": "f12,f14,f2,f3,f6,f8,f10,f24,f25,f26,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f100,f124,f38,f39",
                     }
@@ -187,8 +197,15 @@ def fetch_from_eastmoney():
                         # 不同域名单页上限不同（push2=5000，push2delay=100），按实际返回条数动态分页
                         if items:
                             total_pages = (expected_total + len(items) - 1) // len(items)
-                    all_stocks.extend(items)
-                    print(f"  📄 [{base_url.split('//')[1].split('.')[0]}] 第{page}/{total_pages}页: {len(items)} 条")
+                    # 按代码去重再入列：万一顺序还是漂了，宁可少几条也绝不出重复行
+                    # （重复会让下面的完成度校验虚高 —— 原来 5917 行其实只有 5731 个唯一代码，
+                    #   却判定"抓全了"，于是 180 只漏票静默混过去）
+                    for it in items:
+                        c = str(it.get("f12", "")).strip()
+                        if c and c not in seen_codes:
+                            seen_codes.add(c)
+                            all_stocks.append(it)
+                    print(f"  📄 [{base_url.split('//')[1].split('.')[0]}] 第{page}/{total_pages}页: {len(items)} 条（累计唯一 {len(all_stocks)}）")
                     page += 1
                     if not items:
                         break
@@ -196,12 +213,14 @@ def fetch_from_eastmoney():
                 if len(all_stocks) > len(best_stocks):
                     best_stocks = list(all_stocks)
 
-                # 完整性校验：抓到条数需达到接口 total 的 98%，否则视为分页中途中断
+                # 完整性校验：**唯一代码数**需达到接口 total 的 98%，否则视为分页中途中断
+                #   ⚠️ 必须用 all_stocks（已去重）而不是原始行数：原始行数被重复行灌水，
+                #      会把"漏了 180 只"误判成"抓全了"（2026-09-18 踩过）
                 if expected_total and len(all_stocks) >= expected_total * 0.98:
-                    print(f"  📊 东方财富返回 {len(all_stocks)}/{expected_total} 条（via {base_url.split('//')[1]}）")
+                    print(f"  📊 东方财富返回 {len(all_stocks)}/{expected_total} 只（去重后唯一代码，via {base_url.split('//')[1]}）")
                     complete = True
                     break
-                print(f"  ⚠️ {base_url} 数据不完整 {len(all_stocks)}/{expected_total} 条，尝试其他节点...")
+                print(f"  ⚠️ {base_url} 数据不完整 {len(all_stocks)}/{expected_total} 只（唯一代码），尝试其他节点...")
             except Exception as e:
                 if len(all_stocks) > len(best_stocks):
                     best_stocks = list(all_stocks)
