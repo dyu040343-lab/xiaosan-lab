@@ -1,1 +1,12 @@
-__pycache__/
+# 运行时数据，每天变动，不进版本库
+data/*.json
+!data/us_secid_map.json
+!data/trading_calendar.json
+
+# 账号与备份，严禁入库
+data/users.json
+backups/
+rr_backup_*/
+scripts/__pycache__/
+*.pyc
+.DS_Store
