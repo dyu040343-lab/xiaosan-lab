@@ -183,6 +183,14 @@ body::after {
   color: var(--red);
   border-color: rgba(232,56,74,0.25);
 }
+/* 数据不完整：只抓到一部分、且备用快照也不健康时才出现。
+   虚线边框和「收盘数据」区分开 —— 这时候榜单覆盖不全，用户必须知道。*/
+.status-partial {
+  background: rgba(232,56,74,0.08);
+  color: var(--red);
+  border-color: rgba(232,56,74,0.45);
+  border-style: dashed;
+}
 
 .status-dot {
   width: 6px; height: 6px;
@@ -198,6 +206,7 @@ body::after {
 .status-live .status-dot { background: var(--green); box-shadow: 0 0 6px var(--green); }
 .status-cached .status-dot { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
 .status-static .status-dot { background: var(--red); }
+.status-partial .status-dot { background: var(--red); }
 
 .update-time {
   font-family: 'SFMono-Regular', Consolas, monospace;
@@ -875,6 +884,72 @@ td.name-cell {
 
 td.code-cell { color: var(--dim); font-size: 10px; }
 
+/* ── 自选面板：首列冻结（左右滚到后面仍能认出是哪只股票）──────────────
+   · 代码 + 名称一起冻：只冻代码的话，滚到「当日盈亏」还是得回头猜名字
+   · 第二列的 left 由 applyStickyCols() 按第一列实测宽度写入 —— 列宽是自适应的，
+     写死 px 在不同字号/缩放/机型下一定错位
+   · z-index：角单元格 5 > 表头 3 > 冻结列 2 > 普通单元格（auto） */
+#stockPanel .wide-box th:nth-child(1),
+#stockPanel .wide-box td:nth-child(1),
+#stockPanel .wide-box th:nth-child(2),
+#stockPanel .wide-box td:nth-child(2) {
+  position: sticky;
+  z-index: 2;
+  background: var(--card);
+}
+#stockPanel .wide-box th:nth-child(1),
+#stockPanel .wide-box td:nth-child(1) { left: 0; }
+#stockPanel .wide-box thead th:nth-child(1),
+#stockPanel .wide-box thead th:nth-child(2) { z-index: 5; }
+/* 冻结区右缘一道淡阴影：暗示"这一块是钉住的" */
+#stockPanel .wide-box th:nth-child(2),
+#stockPanel .wide-box td:nth-child(2) { box-shadow: 10px 0 10px -10px rgba(16,27,46,0.35); }
+/* 🩸 sticky 是相对「padding 边缘」定位的，而 .wide-box 的 padding-left:12px 会随内容一起滚走，
+   于是冻结列左边会漏出一条 12px 的缝，透出别的列（截图里表现为股票代码左边有个红色残字）。
+   用伪元素往左补一块同色底，缝就没了 —— 不写死 left 偏移，padding 改了也不会错。 */
+#stockPanel .wide-box th:nth-child(1)::before,
+#stockPanel .wide-box td:nth-child(1)::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -16px;
+  width: 16px;
+  background: var(--card);
+}
+/* 悬停时冻结列也要跟着高亮，否则拖拽时两边颜色不一致 */
+#stockPanel .wide-box tbody tr:hover td:nth-child(1),
+#stockPanel .wide-box tbody tr:hover td:nth-child(2) { background: #f5f7fa; }
+
+/* ── 全市场成交额（KPI 与 tab 之间的一条）──────────────────────────── */
+.vol-panel {
+  display: flex;
+  gap: 20px;
+  align-items: stretch;
+  margin: 16px 0 14px;
+  padding: 13px 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+.vol-left { flex: 0 0 208px; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.vol-label { font-size: 11px; color: var(--dim); display: flex; align-items: center; gap: 6px; }
+.vol-tag { font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--bg-1); color: var(--dim); }
+.vol-tag.hot { background: #fdecec; color: var(--red); }
+.vol-tag.cold { background: #e9f5ee; color: var(--green); }
+.vol-value {
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.2;
+  margin-top: 1px;
+  color: var(--text-hi);
+  font-variant-numeric: tabular-nums;
+}
+.vol-value small { font-size: 13px; font-weight: 500; color: var(--dim); margin-left: 2px; }
+.vol-sub { font-size: 11px; color: var(--dim); margin-top: 1px; line-height: 1.5; }
+.vol-chart { flex: 1; min-width: 0; height: 82px; }
+.vol-chart svg { display: block; width: 100%; height: 100%; }
+
 .price-up { color: var(--red); }
 .price-down { color: var(--green); }
 
@@ -1456,6 +1531,48 @@ button:focus-visible,.tab:focus-visible,.subtab:focus-visible {outline:3px solid
 @media(prefers-reduced-motion:reduce) {html {scroll-behavior:auto;}*,*::before,*::after {transition:none!important;animation:none!important;}}
 
 
+/* ── K 线看板（点股票名打开）────────────────────────────────── */
+.kl-overlay {position:fixed;inset:0;z-index:200;background:rgba(29,29,31,.44);display:flex;align-items:center;justify-content:center;padding:26px;}
+.kl-overlay[hidden] {display:none;}
+.kl-box {width:min(1020px,100%);max-height:calc(100vh - 52px);overflow:auto;background:var(--card);border-radius:20px;box-shadow:0 24px 64px rgba(16,27,46,.24);padding:20px 24px 14px;}
+.kl-head {display:flex;align-items:flex-start;gap:16px;margin-bottom:14px;}
+.kl-name {font-size:17px;font-weight:600;color:var(--text-hi);letter-spacing:.2px;}
+.kl-code {font-size:11px;color:var(--dim);margin-top:3px;font-variant-numeric:tabular-nums;}
+.kl-hover {margin-left:auto;text-align:right;font-size:11px;color:var(--dim);line-height:1.8;font-variant-numeric:tabular-nums;}
+.kl-hover b {font-weight:500;color:var(--text-hi);}
+.kl-close {border:0;background:#f0f0f2;width:30px;height:30px;border-radius:50%;font-size:17px;line-height:1;color:var(--dim);cursor:pointer;flex:0 0 30px;}
+.kl-close:hover {background:#e4e4e8;color:var(--text-hi);}
+.kl-bar {display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding-bottom:12px;border-bottom:1px solid var(--border);}
+.kl-periods {display:flex;gap:4px;background:#eeeef0;padding:3px;border-radius:999px;}
+.kl-p {border:0;background:transparent;font-family:inherit;font-size:11px;padding:6px 13px;border-radius:999px;color:var(--dim);cursor:pointer;}
+.kl-p.active {background:#fff;color:var(--text-hi);font-weight:500;box-shadow:0 1px 3px #1d1d1f14;}
+.kl-p[disabled] {opacity:.32;cursor:not-allowed;}
+.kl-stats {margin-left:auto;font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums;}
+.kl-stats b {font-weight:500;color:var(--text-hi);}
+/* 指标切换：行情 / 资金 / 财务三组，用竖线分隔 */
+.kl-metrics {display:flex;align-items:center;gap:3px;flex-wrap:wrap;padding:9px 0 2px;}
+.kl-m {border:0;background:transparent;font-family:inherit;font-size:11px;padding:5px 10px;border-radius:8px;color:var(--dim);cursor:pointer;}
+.kl-m:hover {background:#f2f2f5;color:var(--text-hi);}
+.kl-m.active {background:#e4e4e9;color:var(--text-hi);font-weight:500;}
+.kl-sep {width:1px;height:14px;background:var(--border);margin:0 6px;}
+.kl-chart {padding-top:10px;}
+.kl-chart svg {display:block;width:100%;height:auto;}
+.kl-foot {font-size:10px;color:var(--dimmer);padding-top:6px;line-height:1.7;}
+.kl-loading,.kl-error {padding:70px 0;text-align:center;font-size:12px;color:var(--dim);}
+.kl-error {color:var(--red);}
+/* 名称可点：只加虚线下划线，不改成链接色 —— 整张表都是股票名，全变蓝会很吵 */
+.stock-link {cursor:pointer;border-bottom:1px dashed transparent;}
+.stock-link:hover {border-bottom-color:var(--border-hi);color:var(--text-hi);}
+.kl-up {fill:var(--red);stroke:var(--red);}
+.kl-dn {fill:var(--green);stroke:var(--green);}
+@media(max-width:760px) {
+  .kl-overlay {padding:10px;}
+  .kl-box {padding:15px 13px 10px;border-radius:16px;max-height:calc(100vh - 20px);}
+  .kl-hover {font-size:10px;}
+  .kl-stats {margin-left:0;}
+  .kl-p {padding:6px 10px;}
+}
+
 .sp-actions {margin-left:auto;}
 
 /* Custom XiaoSan identity: a plotted 小, drawn as a scalable brand mark. */
@@ -1510,7 +1627,43 @@ button:focus-visible,.tab:focus-visible,.subtab:focus-visible {outline:3px solid
   background: var(--bg-1); color: var(--text); font-size: 11px; outline: none;
   font-family: inherit;
 }
+/* 账本条：放在账号条与表格之间。总盈亏是主项（字号最大），
+   当日盈亏/总市值/持仓是辅项 —— 用户最常看的就是"我今天赚了多少、总共赚了多少" */
+.sp-ledger {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px 30px;
+  padding: 11px 14px; border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+  font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+.sp-ledger .lg-item { display: flex; align-items: baseline; gap: 8px; }
+.sp-ledger .lg-label { font-size: 10px; color: var(--dim); white-space: nowrap; }
+.sp-ledger .lg-val {
+  font-size: 16px; font-weight: 700; line-height: 1;
+  font-variant-numeric: tabular-nums; letter-spacing: -0.2px;
+}
+.sp-ledger .lg-val.main { font-size: 22px; }
+.sp-ledger .lg-sub { font-size: 10px; color: var(--dimmer); }
+@media (max-width: 760px) {
+  .sp-ledger { gap: 8px 18px; padding: 9px 12px; }
+  .sp-ledger .lg-val { font-size: 14px; }
+  .sp-ledger .lg-val.main { font-size: 18px; }
+}
 .sp-account input:focus { border-color: var(--accent-dim); }
+/* 自选「成本价」列的输入框：比正文小一号，右对齐（和价格列一致） */
+/* 记账四列的表头/单元格一律不换行 —— 否则「盈亏」会被挤成竖排两字 */
+th.nowrap, .cost-cell { white-space: nowrap; }
+.cost-cell { padding-top: 3px; padding-bottom: 3px; }
+.cost-input {
+  width: 64px; height: 24px; padding: 0 6px; text-align: right;
+  border: 1px solid var(--border); border-radius: 5px;
+  background: var(--bg-1); color: var(--text);
+  font-size: 11px; font-family: inherit; outline: none;
+}
+.cost-input::placeholder { color: var(--dimmer); font-size: 10px; text-align: center; }
+.cost-input.hold-input { width: 56px; }
+.cost-input:hover { border-color: var(--accent-dim); }
+.cost-input:focus { border-color: var(--accent-dim); box-shadow: 0 0 0 2px rgba(108,140,255,0.12); }
+@media (max-width: 760px) { .cost-input { width: 56px; font-size: 10px; } }
 .sp-account .wl-dim { color: var(--dimmer); }
 @media (max-width: 760px) {
   .stock-panel { max-height: 70vh; }
@@ -1574,12 +1727,36 @@ button:focus-visible,.tab:focus-visible,.subtab:focus-visible {outline:3px solid
         <span class="sp-close" onclick="clearQuick()">✕</span>
       </div>
       <div class="sp-account" id="spAccount" hidden></div>
+      <!-- 账本条：总浮动盈亏 / 当日盈亏 / 总市值。独立一行，不占表格列宽，
+           也不跟着表格横向滚动 —— 一眼能看到全部持仓的合计 -->
+      <div class="sp-ledger" id="spLedger" hidden></div>
       <div class="table-box wide-box">
         <table>
           <thead id="spHead"></thead>
           <tbody id="spBody"></tbody>
         </table>
       </div>
+    </div>
+  </div>
+
+  <!-- K 线看板：点任意股票名打开（自选 / 速查 / 资金动向 / 占比 / 放量滞涨 / 财报） -->
+  <div class="kl-overlay" id="klOverlay" hidden onclick="if(event.target===this)closeKline()">
+    <div class="kl-box" role="dialog" aria-modal="true" aria-label="K 线看板">
+      <div class="kl-head">
+        <div>
+          <div class="kl-name" id="klName">--</div>
+          <div class="kl-code" id="klCode">--</div>
+        </div>
+        <div class="kl-hover" id="klHover"></div>
+        <button class="kl-close" onclick="closeKline()" aria-label="关闭">×</button>
+      </div>
+      <div class="kl-bar">
+        <div class="kl-periods" id="klPeriods"></div>
+        <div class="kl-stats" id="klStats"></div>
+      </div>
+      <div class="kl-metrics" id="klMetrics"></div>
+      <div class="kl-chart" id="klChart"><div class="kl-loading">加载中…</div></div>
+      <div class="kl-foot" id="klFoot"></div>
     </div>
   </div>
 
@@ -1630,11 +1807,26 @@ button:focus-visible,.tab:focus-visible,.subtab:focus-visible {outline:3px solid
     </div>
   </div>
 
+  <!-- 全市场成交额：光看净额没有尺度感，这里给「今天成交了多少 + 过去 20 天什么水平」 -->
+  <div class="vol-panel" id="volPanel" hidden>
+    <div class="vol-left">
+      <div class="vol-label">
+        <span>全市场成交额</span>
+        <span class="vol-tag" id="volTag">--</span>
+      </div>
+      <div class="vol-value" id="volValue">--</div>
+      <div class="vol-sub" id="volSub">--</div>
+    </div>
+    <div class="vol-chart" id="volChart"></div>
+  </div>
+
   <!-- Main Tabs -->
   <div class="tab-bar">
     <div class="tab active" onclick="switchTab('flow')">资金动向</div>
     <div class="tab" onclick="switchTab('dynamic')">资金占比动向</div>
     <div class="tab" onclick="switchTab('volspan')">放量滞涨</div>
+    <div class="tab" onclick="switchTab('finance')">财报</div>
+    <a class="tab" href="us-ai.html" style="text-decoration:none;">美股 AI ↗</a>
   </div>
 
   <!-- Sub Tabs -->
@@ -1736,7 +1928,8 @@ let viewList = [];
 
 const STATUS_MAP = {
   live: { cls: 'status-live', text: '实时数据' },
-  cached: { cls: 'status-cached', text: '收盘数据' },
+  cached: { cls: 'status-cached', text: '快照数据' },
+  partial: { cls: 'status-partial', text: '数据不完整' },
   static: { cls: 'status-static', text: '估算数据' },
 };
 
@@ -1778,6 +1971,7 @@ async function fetchData() {
     _universe = null;   // 数据刷新后重建「全市场指标索引」
     _ffMcap = null;     // 同时重建占比分母表（自由流通市值）
     _volspan = null;    // 同时重建「放量滞涨」样本池与量价分
+    _finList = null;    // 同时重建财报列表（它引用 spot 数据）
     ensureTurnover();   // 换手率兜底（旧数据没有该字段时现算）
     render();
     return true;
@@ -1787,6 +1981,121 @@ async function fetchData() {
   }
 }
 
+/* ── 全市场成交额 ───────────────────────────────────────────────
+   为什么要单独一块：三档净额只说明「钱往哪边流」，没有尺度感 ——
+   1.8 万亿的市场里净流出 300 亿，和 8000 亿的市场里净流出 300 亿，含义完全不同。
+   数据来自指数日K（沪综指 + 深综指 + 北证50），见 fetch_data.py 的 build_market_volume。 */
+function volParts(v) {
+  if (v === null || v === undefined || isNaN(v)) return ['--', ''];
+  return v >= 1e4 ? [(v / 1e4).toFixed(2), '万亿'] : [Math.round(v).toLocaleString('zh-CN'), '亿'];
+}
+function volText(v) {
+  const p = volParts(v);
+  return p[0] + (p[1] ? ' ' + p[1] : '');
+}
+
+function renderVolume() {
+  const panel = document.getElementById('volPanel');
+  if (!panel) return;
+  const mv = allData && allData.market_volume;
+  const days = (mv && mv.days) || [];
+  if (!days.length) { panel.hidden = true; return; }
+  panel.hidden = false;
+
+  const last = days[days.length - 1];
+  const cur = (mv.today_v === null || mv.today_v === undefined) ? last.v : mv.today_v;
+  const p = volParts(cur);
+  document.getElementById('volValue').innerHTML = p[0] + (p[1] ? '<small>' + p[1] + '</small>' : '');
+
+  const tagEl = document.getElementById('volTag');
+  const subEl = document.getElementById('volSub');
+  const pct = (a, b) => (a && b ? (a / b - 1) * 100 : null);
+  const st = mv.same_time;
+
+  if (st && mv.partial) {
+    /* 🩸 同期对比：拿「今天截至 14:25」比「昨天截至 14:25」。
+       盘中拿今天半天比昨天全天，会得出「缩量 43%」这种假结论 —— 两个数不是同一段东西。
+       5 分钟K（klt=5）能回 13 个交易日，才做得了这件事。 */
+    const sign = v => (v === null || v === undefined) ? '--'
+      : (v > 0 ? '+' : '') + v.toFixed(1) + '%';
+    const hot = st.vs_prev_pct === null ? '' :
+      st.vs_prev_pct >= 10 ? ' hot' : st.vs_prev_pct <= -10 ? ' cold' : '';
+    tagEl.className = 'vol-tag' + hot;
+    tagEl.textContent = st.vs_prev_pct === null ? (mv.partial ? '盘中' : '已收盘')
+      : st.vs_prev_pct >= 10 ? '放量' : st.vs_prev_pct <= -10 ? '缩量' : '平量';
+    subEl.innerHTML = '较昨日同期 <b>' + sign(st.vs_prev_pct) + '</b>'
+      + ' · 近 ' + st.n + ' 日 <b>' + sign(st.vs_avg_pct) + '</b>'
+      // 只给基准值：主数字用的是实时累计，这里再放一个「今日同期」会出现两个不同的今日数，容易犯疑
+      + '<br>' + st.hhmm + ' 同期 ' + volText(st.prev);
+  } else if (mv.partial) {
+    // 没有分时数据时：只报事实，不判放量缩量（半天比全天没有意义）
+    tagEl.className = 'vol-tag';
+    tagEl.textContent = '盘中';
+    subEl.innerHTML = '昨日全天 ' + volText(mv.prev) + ' · 20日均 ' + volText(mv.avg20)
+      + '（缺分时数据，无法做同期对比）';
+  } else {
+    const d = pct(cur, mv.prev);
+    const a = pct(cur, mv.avg20);
+    tagEl.className = 'vol-tag' + (d === null ? '' : d >= 10 ? ' hot' : d <= -10 ? ' cold' : '');
+    tagEl.textContent = d === null ? '已收盘' : d >= 10 ? '放量' : d <= -10 ? '缩量' : '平量';
+    subEl.innerHTML = '较昨日 ' + (d === null ? '--' : (d > 0 ? '+' : '') + d.toFixed(1) + '%')
+      + ' · 20日均 ' + volText(mv.avg20)
+      + (a === null ? '' : '（' + (a > 0 ? '+' : '') + a.toFixed(1) + '%）');
+  }
+  renderVolChart(days, mv);
+}
+
+function renderVolChart(days, mv) {
+  const box = document.getElementById('volChart');
+  if (!box) return;
+  // 盘中剔除今日：它只是半天，和过去 20 个整天的点画在同一条线上会变成一根假暴跌
+  const src = mv.partial ? days.slice(0, -1) : days;
+  const pts = src.slice(-20);
+  if (pts.length < 2) { box.innerHTML = ''; return; }
+  const W = Math.max(280, box.clientWidth || 600);
+  const H = box.clientHeight || 82;
+  const padL = 2, padR = 14, padT = 13, padB = 14;
+  const vals = pts.map(x => x.v);
+  const vmax = Math.max.apply(null, vals), vmin = Math.min.apply(null, vals);
+  const span = Math.max(vmax - vmin, vmax * 0.06, 1);
+  const hi = vmax + span * 0.3, lo = vmin - span * 0.25;
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+  const X = i => padL + innerW * i / (pts.length - 1);
+  const Y = v => padT + (hi - v) / (hi - lo) * innerH;
+  const n1 = n => n.toFixed(1);
+  const dstr = i => { const s = pts[i].d; return Number(s.slice(5, 7)) + '/' + Number(s.slice(8)); };
+
+  let path = '';
+  pts.forEach((x, i) => { path += (i ? 'L' : 'M') + n1(X(i)) + ' ' + n1(Y(x.v)); });
+  const area = path + 'L' + n1(X(pts.length - 1)) + ' ' + n1(padT + innerH)
+    + 'L' + n1(padL) + ' ' + n1(padT + innerH) + 'Z';
+
+  const dots = pts.map((x, i) => {
+    const isLast = i === pts.length - 1;
+    return '<circle cx="' + n1(X(i)) + '" cy="' + n1(Y(x.v)) + '" r="' + (isLast ? 3.2 : 1.8) + '"'
+      + ' fill="' + (isLast ? '#99531c' : '#ffffff') + '" stroke="#99531c" stroke-width="1.2">'
+      + '<title>' + x.d + '　' + volText(x.v) + '</title></circle>';
+  }).join('');
+
+  const avgLine = (mv.avg20 && mv.avg20 > lo && mv.avg20 < hi)
+    ? '<line x1="' + padL + '" y1="' + n1(Y(mv.avg20)) + '" x2="' + (W - padR) + '" y2="' + n1(Y(mv.avg20))
+      + '" stroke="#c2cde0" stroke-width="1" stroke-dasharray="3 3"/>'
+      + '<text x="' + (padL + 2) + '" y="' + n1(Y(mv.avg20) - 3) + '" font-size="9.5" fill="#98a4b8">20日均</text>'
+    : '';
+
+  const lastY = Y(pts[pts.length - 1].v);
+  box.innerHTML = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">'
+    + '<path d="' + area + '" fill="#99531c" opacity="0.06"/>'
+    + avgLine
+    + '<path d="' + path + '" fill="none" stroke="#99531c" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>'
+    + dots
+    + '<text x="' + padL + '" y="' + (H - 2) + '" font-size="9.5" fill="#98a4b8">' + dstr(0) + '</text>'
+    + '<text x="' + (W - padR) + '" y="' + (H - 2) + '" text-anchor="end" font-size="9.5" fill="#98a4b8">' + dstr(pts.length - 1) + '</text>'
+    + '<text x="' + n1(X(pts.length - 1) - 5) + '" y="' + n1(Math.max(9, lastY - 7)) + '" text-anchor="end" font-size="9.5" fill="#99531c">'
+    + volText(pts[pts.length - 1].v) + '</text>'
+    + '</svg>';
+}
+
 function render() {
   if (!allData) return;
   const ov = allData.overview;
@@ -1794,7 +2103,9 @@ function render() {
 
   const badge = document.getElementById('statusBadge');
   badge.className = 'status-badge ' + status.cls;
-  document.getElementById('statusText').textContent = status.text;
+  // 文案优先用后端给的 data_label：它会带上缓存的真实日期（如「收盘数据 · 9/18」），
+  // 只写「收盘数据」会让用户以为这是今天的数据。
+  document.getElementById('statusText').textContent = ov.data_label || status.text;
   const stampEl = document.getElementById('updateTime');
   stampEl.textContent = dataTimeLabel(allData.last_updated);
   tickFlash(stampEl, allData.last_updated);
@@ -1831,16 +2142,29 @@ function render() {
   document.getElementById('legendMedium').textContent = ts.medium_pct;
   document.getElementById('legendMain').textContent = ts.main_pct;
 
+  renderVolume();    // 全市场成交额 + 近 20 日走势
   renderFlow();
   renderChipFlow();
   refreshPanel();   // 自选 / 速查面板跟着新数据刷新
 }
 
+// 窗口尺寸变了要重画折线（SVG 是按像素宽度生成的，缩放后会糊或错位）
+let _volResizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(_volResizeTimer);
+  _volResizeTimer = setTimeout(() => {
+    const mv = allData && allData.market_volume;
+    if (mv && (mv.days || []).length) { renderVolChart(mv.days, mv); applyStickyCols(); }
+  }, 150);
+});
+
 function PRIMARY_FIELD() {
+  if (currentTab === 'finance') return 'np_yoy';
   if (currentTab === 'dynamic') return 'retail_net';
   return currentFlow === 'medium' ? 'medium_net' : currentFlow === 'main' ? 'main_net' : 'retail_net';
 }
 function TAB_NAME() {
+  if (currentTab === 'finance') return '财报';
   if (currentTab === 'volspan') return '量价';
   if (currentTab === 'dynamic') return '占比';
   return currentFlow === 'medium' ? '中单' : currentFlow === 'main' ? '主力' : '散户';
@@ -1932,7 +2256,95 @@ function volspanPool() {
   return _volspan;
 }
 
+/* ═══ 财报列表 ══════════════════════════════════════════════════
+   后端已按「逐股取最新已披露」合并（Q3 有就用 Q3，没披露的退回中报），
+   这里只负责和行情数据拼在一起（名称/价格/涨跌/行业）。 */
+let _finList = null;
+function financeList() {
+  if (_finList) return _finList;
+  const spot = new Map((allData?.retail_flow || []).map(s => [s.code, s]));
+  _finList = (allData?.finance?.rows || []).map(r => {
+    const s = spot.get(r.code) || {};
+    return Object.assign({}, s, r, {
+      name: s.name || r.code,
+      sector: r.sector || s.sector || '',
+    });
+  });
+  return _finList;
+}
+function finTagFromDate(d) {
+  const m = String(d || '').slice(5, 7);
+  return m === '03' ? 'Q1' : m === '06' ? 'H1' : m === '09' ? 'Q3' : m === '12' ? 'FY' : '';
+}
+function finTagName(tag) {
+  return { Q1: '一季报', H1: '中报', Q3: '三季报', FY: '年报' }[tag] || '财报';
+}
+function financeMeta() {
+  const f = allData?.finance || {};
+  // 按「当前报告期」统计，别写死 Q3 —— 明年 4 月这里应该是年报/一季报
+  const curTag = finTagFromDate(f.period);
+  let curN = 0, prevN = 0;
+  for (const r of (f.rows || [])) {
+    if (String(r.period || '').slice(-2) === curTag) curN++; else prevN++;
+  }
+  return { asOf: f.as_of || '', fetchedAt: f.fetched_at || '', period: f.period || '',
+           curTag, curN, prevN, total: (f.rows || []).length };
+}
+function finPeriodLabel(p) {
+  const t = String(p || '');
+  if (t.slice(-2) === 'Q3') return 'Q3';
+  if (t.slice(-2) === 'H1') return '中报';
+  if (t.slice(-2) === 'Q1') return 'Q1';
+  if (t.slice(-2) === 'FY') return '年报';
+  return '--';
+}
+// 百分比单元格（红正绿负）。财报里「正=增长」是好事，与站点红涨绿跌一致
+function finPctTd(v, dp, neutral) {
+  if (v === null || v === undefined || v !== v) return '<td style="color:var(--dim)">--</td>';
+  const c = neutral ? 'var(--text-hi)' : (v > 0 ? 'var(--red)' : v < 0 ? 'var(--green)' : 'var(--dim)');
+  return '<td style="color:' + c + ';font-weight:500">' + (v > 0 ? '+' : '') + v.toFixed(dp === undefined ? 2 : dp) + '%</td>';
+}
+function finNumTd(v, dp) {
+  if (v === null || v === undefined || v !== v) return '<td style="color:var(--dim)">--</td>';
+  return '<td class="num-cell">' + v.toFixed(dp === undefined ? 2 : dp) + '</td>';
+}
+
 function getBaseList() {
+  // 财报 tab：已按报告期合并好，筛选器只做过滤
+  if (currentTab === 'finance') {
+    let list = financeList().slice();
+    const has = v => v !== null && v !== undefined && v === v;
+    /* 🩸 两个口径闸门（2026-10-30 上线当天踩到）：
+       ① 低基数极值：去年净利接近 0 时同比能算出 +98070%，榜首前 10 全是这类票；
+       ② 小营收公司：营收 2000 万 → 1 亿就能算出 +400%，
+          榜首被未盈利生物医药（-U）和 ST 占据，对选股没有意义。
+       所以：|同比/环比| ≤ 1000%，且年初至今营收 ≥ 1 亿。 */
+    list = list.filter(s => {
+      if (Math.abs(s.np_yoy) > FIN_YOY_CAP || Math.abs(s.np_qoq) > FIN_YOY_CAP) return false;
+      if (Math.abs(s.rev_yoy) > FIN_YOY_CAP || Math.abs(s.rev_qoq) > FIN_YOY_CAP) return false;
+      // ST / 退市股不进榜：这类票财报数字常年失真，且不在站点其他榜的口径里
+      if (/ST|退/.test(s.name || '')) return false;
+      return !(s.rev !== null && s.rev !== undefined && s.rev < FIN_MIN_REV);
+    });
+    switch (currentSub) {
+      case 'fin_all':
+        /* ROE 榜再叠一层规模门槛：净资产很小的微利公司会把 ROE 顶到 90%+（实测榜首
+           是大誉微-U 92.76%、中喜博创 91.26%），那是「分母小」不是「赚钱强」。
+           净利 ≥ 1 亿之后，榜上才是真正有利润体量的公司。 */
+        list = list.filter(s => s.np !== null && s.np !== undefined && s.np >= FIN_MIN_NP);
+        break;
+      case 'fin_growth':
+        list = list.filter(s => has(s.np_yoy) && s.np_yoy >= 50 && has(s.rev_yoy) && s.rev_yoy > 0);
+        break;
+      case 'fin_qoq':
+        list = list.filter(s => has(s.np_qoq) && s.np_qoq > 0 && has(s.np_yoy) && s.np_yoy > 0);
+        break;
+      case 'fin_cash':
+        list = list.filter(s => has(s.cash_q) && s.cash_q >= 1 && has(s.np_yoy) && s.np_yoy > 0);
+        break;
+    }
+    return list;
+  }
   // 放量滞涨 tab：样本池 + 量价分已算好，方向过滤看子榜
   if (currentTab === 'volspan') {
     const pool = volspanPool();
@@ -1982,6 +2394,10 @@ function applyDefaultSort() {
     'main_ratio_bottom': ['_ratio', true],
     'volspan_top': ['_vp', false],
     'volspan_inst': ['_vp', false],
+    'fin_all': ['roe', false],
+    'fin_growth': ['np_yoy', false],
+    'fin_qoq': ['np_qoq', false],
+    'fin_cash': ['cash_q', false],
   };
   const d = map[currentSub] || [pf, false];
   sortCol = d[0]; sortAsc = d[1]; userSorted = false;
@@ -1999,6 +2415,10 @@ function chartTitleFor() {
     case 'main_ratio_bottom': return '主力占比 BOTTOM30 · 净卖出最强';
     case 'volspan_top':  return '放量滞涨 TOP30 · 量价分最高（今天放量 + 价格还没起来）';
     case 'volspan_inst': return '放量滞涨 · 主力净流入 TOP30（吸筹候选）';
+    case 'fin_all':      return '财报 · ROE TOP30（赚钱效率，不受低基数影响）';
+    case 'fin_growth':   return '业绩爆发 TOP30 · 净利同比 ≥50% 且营收正增长';
+    case 'fin_qoq':      return '环比加速 TOP30 · 单季环比与同比双正';
+    case 'fin_cash':     return '现金为王 TOP30 · 现金含量 ≥1 且净利正增长';
   }
   return 'TOP30';
 }
@@ -2050,6 +2470,24 @@ function renderView() {
         + Math.abs(VOLSPAN_MAX_DROP) + '%）　量价分 = 活跃分 × 滞涨分 ÷ 100'
         + '（活跃 = 换手率与量比的分位均值；蓄势 = 今天没大动 + 近60天没大动 —— 涨多了、跌狠了都扣分）　'
         + '<b>⚠️ 放量滞涨可能是吸筹、也可能是派发 —— 方向看「主力净额」列</b>';
+    } else if (currentTab === 'finance') {
+      const m = financeMeta();
+      noteEl.hidden = false;
+      noteEl.innerHTML = '数据截至 <b>' + (m.asOf || '--') + '</b>'
+        + (m.fetchedAt ? '（抓取于 ' + String(m.fetchedAt).slice(11, 16) + '）' : '')
+        + '　已披露' + finTagName(m.curTag) + ' <b>' + m.curN + '</b> 家'
+        + (m.prevN ? '，另有 ' + m.prevN + ' 家还没发' + finTagName(m.curTag)
+                     + ' → 用<b>上一期</b>兜底（看「报告期」列）' : '')
+        + '　<b>「净利同比」是年初至今累计口径，「单季净利同比」是本季单季 vs 去年同季</b>'
+        + '（两者可能完全相反：五粮液累计 +49.98%、单季 −48.25%）'
+        + '　同比为年初至今累计口径；<b>环比 = 单季环比</b>（本季 vs 上一季，剔除累计口径的累加效应）'
+        + '　现金含量 = 每股经营现金流 ÷ 每股收益（<1 说明利润没完全变成现金）'
+        + '　银行/券商无毛利率 → 显示 --'
+        + '　<b>同比或环比超过 ±' + FIN_YOY_CAP + '% 的多为低基数/扭亏，已从榜单剔除</b>'
+        + '（这类看「预告」和「环比」更准）'
+        + '　年初至今营收 < ' + FIN_MIN_REV + ' 亿的公司也不进榜（增长率是噪音）'
+        + '　ST / 退市股不进榜（数字常年失真）'
+        + '　ROE 榜只收净利 ≥ ' + FIN_MIN_NP + ' 亿的公司（避免净资产过小把 ROE 顶到 90%+）';
     } else {
       noteEl.hidden = true; noteEl.textContent = '';
     }
@@ -2065,8 +2503,13 @@ function renderChart(stocks, primaryField) {
   }
   const isRetailSide = IS_RETAIL_SIDE();
   const isMainSide = IS_MAIN_SIDE();
-  let metric, maxVal;
-  if (currentTab === 'volspan') {
+  let metric, maxVal, finMetric = null;
+  if (currentTab === 'finance') {
+    // 图表跟随当前排序列：点「ROE」列头，图就画 ROE —— 一张表多种视角
+    finMetric = FIN_NUM_COLS.indexOf(sortCol) >= 0 ? sortCol : 'np_yoy';
+    metric = finMetric;
+    maxVal = Math.max(...stocks.map(s => Math.abs(s[metric] || 0)), 1);
+  } else if (currentTab === 'volspan') {
     metric = '_vp';                                             // 量价分 0~100
     maxVal = Math.max(...stocks.map(s => s[metric] || 0), 1);
   } else if (currentTab === 'dynamic') {
@@ -2080,7 +2523,13 @@ function renderChart(stocks, primaryField) {
   for (const s of stocks) {
     const val = s[metric] || 0;
     let displayVal, valColor, barColor;
-    if (currentTab === 'volspan') {
+    if (currentTab === 'finance') {
+      const unit = (finMetric === 'rev' || finMetric === 'np') ? '亿'
+                 : (finMetric === 'cash_q' || finMetric === 'eps') ? '' : '%';
+      displayVal = (val >= 0 ? '+' : '') + val.toFixed(2) + unit;
+      valColor = val >= 0 ? 'var(--red)' : 'var(--green)';
+      barColor = val >= 0 ? 'red' : 'green';
+    } else if (currentTab === 'volspan') {
       displayVal = val.toFixed(1) + ' 分';
       valColor = 'var(--accent)';
       barColor = 'accent';
@@ -2137,7 +2586,7 @@ function volspanRow(s, offScope) {
   const vr = s.vol_ratio;
   return '<tr>' +
     '<td class="code-cell">' + s.code + '</td>' +
-    '<td class="name-cell">' + starBtn(s.code) + s.name
+    '<td class="name-cell">' + starBtn(s.code) + nameLink(s.code, s.name)
       + (offScope ? '<span class="off-scope" title="不在本榜单口径内，是你要求单独显示的">口径外</span>' : '') + '</td>' +
     turnoverTd(s) +
     '<td class="' + cls + '">' + (s.price > 0 ? s.price.toFixed(2) : '--') + '</td>' +
@@ -2170,11 +2619,69 @@ function ratioTd(s) {
     + '</span></div></td>';
 }
 
+const FIN_COLS = [
+  {key: 'code', label: '代码'},
+  {key: 'name', label: '名称'},
+  {key: 'period', label: '报告期',
+   tip: 'Q3 = 三季报；中报 = 还没发三季报、用半年报兜底 —— 看到「中报」说明这家最新数据是 6 月底的，不是 9 月底'},
+  {key: 'rev_yoy', label: '营收同比', tip: '年初至今营业收入同比（%）。生意还在不在长，先看这个'},
+  {key: 'np_yoy', label: '净利同比', tip: '年初至今归母净利润同比（%），与东财「业绩报表」口径一致。⚠️ 这是累计口径，会被前几个季度拖累 —— 想只看本季请看「单季净利同比」'},
+  {key: 'np_q_yoy', label: '单季净利同比',
+   tip: '本季单季净利 vs 去年同期单季（%）。举例：五粮液 2026Q3 累计 +49.98%，但 Q3 单季 −48.25% —— 前两季撑着、Q3 已经在掉。判断「这个季度到底怎么样」用这一列；去年同期单季亏损的不计算'},
+  {key: 'np_qoq', label: '净利环比',
+   tip: '单季环比 = 本季单季 ÷ 上一季单季 − 1（%）。同比看去年基数，环比看季节波动内的加速/减速'},
+  {key: 'roe', label: 'ROE', tip: '加权 ROE（年初至今，%）。赚钱效率，杜邦分析的核心'},
+  {key: 'gross', label: '毛利率', tip: '销售毛利率（年初至今，%）。下滑通常意味着竞争恶化或成本上升；银行/券商不披露 → --'},
+  {key: 'cash_q', label: '现金含量',
+   tip: '每股经营现金流 ÷ 每股收益。≥1 说明利润真有现金进来；<0.5 要警惕「纸面利润」。亏损股不计算'},
+  {key: 'fc_type', label: '预告', tip: '业绩预告类型（预增/略增/扭亏/预减/首亏…）与净利增幅区间'},
+  {key: 'notice', label: '公告日', tip: '财报公告日 —— 判断「这条数据有多新」'},
+  {key: 'sector', label: '行业'},
+];
+
+function financeRow(s) {
+  const p = String(s.period || '');
+  const pl = finPeriodLabel(p);
+  const pCls = p.slice(-2) === 'H1' ? 'color:var(--accent)' : 'color:var(--text-hi)';
+  const periodTd = '<td title="' + (p || '') + '" style="' + pCls + ';font-weight:500">' + pl + '</td>';
+  let fcTd = '<td style="color:var(--dimmer)">--</td>';
+  if (s.fc_type) {
+    const up = ['预增', '略增', '扭亏', '续盈'].indexOf(s.fc_type) >= 0;
+    const down = ['预减', '略减', '首亏', '续亏'].indexOf(s.fc_type) >= 0;
+    const c = up ? 'var(--red)' : down ? 'var(--green)' : 'var(--dim)';
+    let amp = '';
+    if (s.fc_amp_low !== null && s.fc_amp_low !== undefined
+        && s.fc_amp_high !== null && s.fc_amp_high !== undefined) {
+      amp = '<span style="color:var(--dimmer);font-size:10px"> '
+        + (s.fc_amp_low > 0 ? '+' : '') + Math.round(s.fc_amp_low) + '%'
+        + '~' + (s.fc_amp_high > 0 ? '+' : '') + Math.round(s.fc_amp_high) + '%</span>';
+    }
+    fcTd = '<td style="color:' + c + ';font-weight:500;white-space:nowrap">' + s.fc_type + amp + '</td>';
+  }
+  return '<tr>'
+    + '<td class="code-cell">' + s.code + '</td>'
+    + '<td class="name-cell">' + starBtn(s.code) + nameLink(s.code, s.name || '--') + '</td>'
+    + periodTd
+    + finPctTd(s.rev_yoy)
+    + finPctTd(s.np_yoy)
+    + finPctTd(s.np_q_yoy)
+    + finPctTd(s.np_qoq)
+    + finNumTd(s.roe)
+    + finNumTd(s.gross)
+    + finNumTd(s.cash_q)
+    + fcTd
+    + '<td style="color:var(--dim);font-size:11px;white-space:nowrap" title="'
+    + (s.notice || '') + '">' + (s.notice ? String(s.notice).slice(5) : '--') + '</td>'
+    + '<td><span class="tag">' + (s.sector || '--') + '</span></td>'
+    + '</tr>';
+}
+
 function renderTable(stocks, primaryField, offScope) {
   const isDynamic = currentTab === 'dynamic';
   const isVolspan = currentTab === 'volspan';
+  const isFinance = currentTab === 'finance';
   // 价格 / 涨跌 / 换手率 三列紧跟「名称」之后，方便一眼看到实时行情与活跃度
-  const cols = isVolspan ? [
+  const cols = isFinance ? FIN_COLS : isVolspan ? [
     {key: 'code', label: '代码'},
     {key: 'name', label: '名称'},
     // 换手率提到最前：本榜第一眼要看的就是「活跃度」，价格是第二眼的确认
@@ -2229,7 +2736,7 @@ function renderTable(stocks, primaryField, offScope) {
   ];
   // 当前资金视角列高亮（仅资金动向 tab；占比 tab 的 primaryField 恒为 retail_net，不参与高亮）
   const hlKey = (currentTab === 'flow') ? primaryField : null;
-  const ncols = isVolspan ? 11 : (isDynamic ? 10 : 9);
+  const ncols = isFinance ? FIN_COLS.length : isVolspan ? 11 : (isDynamic ? 10 : 9);
   let headHtml = '<tr>' + cols.map(c => {
     let cls = 'sortable';
     if (sortCol === c.key) cls += sortAsc ? ' sort-asc' : ' sort-desc';
@@ -2240,6 +2747,7 @@ function renderTable(stocks, primaryField, offScope) {
 
   let bodyHtml = '';
   for (const s of stocks) {
+    if (isFinance) { bodyHtml += financeRow(s); continue; }
     if (isVolspan) { bodyHtml += volspanRow(s, offScope); continue; }
     const cls = s.change_pct > 0 ? 'price-up' : s.change_pct < 0 ? 'price-down' : '';
     const r = s.retail_net || 0, m = s.medium_net || 0, mn = s.main_net || 0;
@@ -2248,7 +2756,7 @@ function renderTable(stocks, primaryField, offScope) {
     const isHL = (key) => key === hlKey ? ' class="col-highlight"' : '';
     bodyHtml += '<tr>' +
       '<td class="code-cell">' + s.code + '</td>' +
-      '<td class="name-cell">' + starBtn(s.code) + s.name
+      '<td class="name-cell">' + starBtn(s.code) + nameLink(s.code, s.name)
         + (offScope ? '<span class="off-scope" title="不在本榜单口径内，是你要求单独显示的">口径外</span>' : '') + '</td>' +
       '<td class="' + cls + '">' + (s.price > 0 ? s.price.toFixed(2) : '--') + '</td>' +
       '<td class="' + cls + '">' + (s.change_pct ? (s.change_pct > 0 ? '+' : '') + s.change_pct.toFixed(2) + '%' : '--') + '</td>' +
@@ -2575,7 +3083,7 @@ function renderChipFlow() {
       ? '<span style="color:var(--dim)">--</span>'
       : '<span style="font-weight:500">' + x.lock_ratio.toFixed(1) + '%</span>';
     html += '<tr>' +
-      '<td class="name-cell">' + starBtn(x.code) + x.name + '</td>' +
+      '<td class="name-cell">' + starBtn(x.code) + nameLink(x.code, x.name) + '</td>' +
       '<td>' + lockTxt + '</td>' +
       '<td style="color:var(--dim)">' + (x.float_ratio || 0).toFixed(1) + '%</td>' +
       pCol(x.retail_ff, 'var(--red)') +
@@ -2599,7 +3107,14 @@ function renderChipFlow() {
    —— 自选存 localStorage（无账号体系），支持导出/导入文本
    ══════════════════════════════════════════════════════════ */
 const WL_KEY = 'xiaosan_watchlist_v1';
+const COST_KEY = 'xiaosan_cost_v1';   // 自选成本价：{代码: 成本}
+const HOLD_KEY = 'xiaosan_hold_v1';   // 自选持仓（手）：{代码: 手数}
+const LEDGER_DIRTY_KEY = 'xiaosan_ledger_dirty_v1';   // 本地记账是否还没推到账号
 let watchlist = [];              // 自选代码数组，顺序 = 用户加入顺序
+let costMap = {};                // 用户自填成本价（元/股）；0 / 缺失 = 未填
+let holdMap = {};                // 用户自填持仓（手，1 手 = 100 股）；0 / 缺失 = 未填
+let ledgerDirty = false;         // true = 本地记账更新过、还没成功上传（登录后优先推本地）
+let spBaseNote = '';             // 自选面板说明文案（成本汇总拼在它后面）
 let panelMode = null;            // null | 'search' | 'watch'
 let spRows = [];                 // 面板当前的股票对象数组
 let spSortCol = null, spSortAsc = true;
@@ -2634,6 +3149,34 @@ const SP_COLS = [
   {key:'inst_delta',   label:'主力环比', tip:'机构持股的季度环比（百分点）。与「户数变化」同一时间窗口'},
 ];
 
+/* 成本价 / 持仓 / 盈亏：只在「自选」里出现。
+   速查是"查一下行情"，没有记账语境；自选是"我的持仓"，才需要记账。
+   插在「涨跌」后面 —— 与现价相邻，方便横向对比"市场涨跌 vs 我的盈亏"。 */
+const ACCT_COLS = [
+  {key:'cost',    label:'成本价', tip:'你买入的均价（元/股）。填在每行的输入框里，只存在本机浏览器，不上传服务器。留空 = 未填，盈亏列显示 --'},
+  {key:'hold',    label:'持仓(手)', tip:'持有多少手，1 手 = 100 股。允许小数（送股/配股会产生零股）。只存本机。不填 = 不算盈亏额'},
+  {key:'pnl_pct', label:'盈亏',   tip:'（现价 − 成本价）÷ 成本价 × 100%。红 = 赚、绿 = 亏。按"当前价"计算，不是你的实际成交回报（未计手续费与分红）'},
+  {key:'pnl_amt', label:'盈亏额', tip:'（现价 − 成本价）× 手数 × 100，单位：元。≥1 万显示为「万」。只有成本价和持仓都填了才算'},
+  {key:'day_pnl', label:'当日盈亏', tip:'（现价 − 昨收）× 手数 × 100，单位：元。昨收由当日涨跌幅反推。只要填了持仓就能算，不需要成本价'},
+];
+/* 财报四列：只放在自选面板（看自己持仓的基本面）。
+   速查面板的字段已经够多，不再塞；要完整财报看「财报」tab。
+   顺序按"先趋势、再质量、最后元信息"：净利同比 → ROE → 毛利率 → 报告期。 */
+const FIN_PANEL_COLS = [
+  {key:'np_yoy',     label:'净利同比', tip:'年初至今归母净利润同比（%）。看持仓的盈利趋势，比股价更早说话'},
+  {key:'roe',        label:'ROE',      tip:'加权 ROE（年初至今）。赚钱效率；长期看 15% 以上算优秀'},
+  {key:'gross',      label:'毛利率',   tip:'销售毛利率（年初至今，%）。定价权与成本控制的结果；和「净利同比」一起看 —— 营收涨但毛利率跌，说明在降价抢量。银行/券商无此概念 → --'},
+  {key:'fin_period', label:'报告期',   tip:'Q3 = 三季报；中报 = 还没发三季报、用半年报兜底'},
+];
+function panelCols() {
+  if (panelMode !== 'watch') return SP_COLS;
+  let cols = SP_COLS.slice();
+  const hi = cols.findIndex(c => c.key === 'sector') + 1;
+  cols = cols.slice(0, hi).concat(FIN_PANEL_COLS, cols.slice(hi));   // 财务列跟行业走
+  const i = cols.findIndex(c => c.key === 'change_pct') + 1;
+  return cols.slice(0, i).concat(ACCT_COLS, cols.slice(i));          // 记账列跟涨跌走
+}
+
 /* ── 自选读写 ──
    localStorage 是唯一事实来源：
    1) 每次改动前先 loadWatchlist() 重新读盘，避免多标签页互相覆盖（后写的把先写的抹掉）
@@ -2648,6 +3191,291 @@ function loadWatchlist() {
 function saveWatchlist() {
   try { localStorage.setItem(WL_KEY, JSON.stringify(watchlist)); } catch (e) {}
   scheduleWlPush();        // 登录状态下把改动同步到账号（去抖，失败静默重试）
+}
+
+/* ── 成本价 / 持仓读写 ──
+   · 本机 localStorage 是主存储（不登录也能用）。
+   · 登录后跟账号同步（2026-10-19 起）：`/api/watchlist` 的 costs / holds 字段，
+     last-write-wins —— 本地改过就先推本地，否则以账号里的为准、只补本地独有的代码。
+     这样换设备登录同一账号能看到成本与持仓。
+   · 代码从自选里删掉时不清记账：用户可能只是想先移除看看，回头加回来数据还在。
+     代价是 localStorage 里会留少量孤儿键（可忽略）。
+   ───────────────── */
+// 读一份 {代码: 正数} 字典（成本和持仓共用，避免写两遍一样的容错）
+function _readNumMap(key, dp) {
+  try {
+    const v = JSON.parse(localStorage.getItem(key) || '{}');
+    const out = {};
+    const k = Math.pow(10, dp);
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      for (const c of Object.keys(v)) {
+        const n = Number(v[c]);
+        if (/^\d{6}$/.test(c) && isFinite(n) && n > 0) out[c] = Math.round(n * k) / k;
+      }
+    }
+    return out;
+  } catch (e) { return {}; }
+}
+function loadCosts() { costMap = _readNumMap(COST_KEY, 3); }
+function loadHolds() { holdMap = _readNumMap(HOLD_KEY, 2); }
+function loadLedgerDirty() {
+  try { ledgerDirty = localStorage.getItem(LEDGER_DIRTY_KEY) === '1'; } catch (e) { ledgerDirty = false; }
+}
+// 记账一改就打脏标记并去抖推送（登录状态下）；
+// 推送成功才清标记 —— 换设备登录时靠它判断"该推本地还是该拉账号"
+function _markLedgerDirty() {
+  ledgerDirty = true;
+  try { localStorage.setItem(LEDGER_DIRTY_KEY, '1'); } catch (e) {}
+  scheduleWlPush();
+}
+function _clearLedgerDirty() {
+  ledgerDirty = false;
+  try { localStorage.removeItem(LEDGER_DIRTY_KEY); } catch (e) {}
+}
+// 静默写入（同步用：不设脏标记、不触发推送）
+function _writeLedger(costs, holds) {
+  costMap = costs || {};
+  holdMap = holds || {};
+  try {
+    localStorage.setItem(COST_KEY, JSON.stringify(costMap));
+    localStorage.setItem(HOLD_KEY, JSON.stringify(holdMap));
+  } catch (e) {}
+}
+function saveCosts() {
+  try { localStorage.setItem(COST_KEY, JSON.stringify(costMap)); } catch (e) {}
+  _markLedgerDirty();
+}
+function saveHolds() {
+  try { localStorage.setItem(HOLD_KEY, JSON.stringify(holdMap)); } catch (e) {}
+  _markLedgerDirty();
+}
+
+function costOf(code) {
+  const v = costMap[code];
+  return (isFinite(v) && v > 0) ? v : null;
+}
+function holdOf(code) {
+  const v = holdMap[code];
+  return (isFinite(v) && v > 0) ? v : null;
+}
+// 盈亏比例（%）。没有成本、或现价为 0（停牌/退市）→ null，界面显示 --
+function pnlOf(s) {
+  const c = (s && costOf(s.code)) || null;
+  const p = s && s.price;
+  if (!c || !(p > 0)) return null;
+  return (p - c) / c * 100;
+}
+// 持仓市值（元）。没有手数或没有现价 → null
+function mvOf(s) {
+  const h = (s && holdOf(s.code)) || null;
+  const p = s && s.price;
+  if (!h || !(p > 0)) return null;
+  return p * h * 100;
+}
+// 盈亏金额（元）=（现价 − 成本）× 手数 × 100。成本与手数都要有
+function pnlAmtOf(s) {
+  const c = (s && costOf(s.code)) || null;
+  const h = (s && holdOf(s.code)) || null;
+  const p = s && s.price;
+  if (!c || !h || !(p > 0)) return null;
+  return (p - c) * h * 100;
+}
+// 昨收反推：接口只给涨跌幅，没给昨收。price = prev × (1 + chg/100)
+//   ⚠️ chg = −100 时分母为 0（也意味着数据异常），判 null
+function prevCloseOf(s) {
+  const p = s && s.price;
+  const c = s && s.change_pct;
+  if (!(p > 0) || c === null || c === undefined || !isFinite(c) || c <= -100) return null;
+  return p / (1 + c / 100);
+}
+// 当日盈亏（元）=（现价 − 昨收）× 手数 × 100。只要持仓，不需要成本
+function dayPnlOf(s) {
+  const h = (s && holdOf(s.code)) || null;
+  const p = s && s.price;
+  const prev = s ? prevCloseOf(s) : null;
+  if (!h || prev === null || !(p > 0)) return null;
+  return (p - prev) * h * 100;
+}
+// 输入 → 合法成本（保留 3 位，够 A 股用）。非法/0/负数 = 清除
+//   ⚠️ 不能简单剥掉所有非数字字符：那样 "-3" 会变成 3（负成本被静默改成正数）
+function parseCost(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return null;
+  const m = s.match(/-?\d+(?:\.\d+)?/);
+  if (!m) return null;
+  const n = parseFloat(m[0]);
+  if (!isFinite(n) || n <= 0) return null;
+  return Math.round(n * 1000) / 1000;
+}
+// 持仓手数：同样规则，保留 2 位（允许 0.5 手这种零股）
+function parseHold(raw) {
+  const n = parseCost(raw);
+  return n === null ? null : Math.round(n * 100) / 100;
+}
+function setCost(code, raw, el) {
+  const v = parseCost(raw);
+  if (v === null) delete costMap[code]; else costMap[code] = v;
+  saveCosts();
+  // 只刷新这一行的盈亏格 + 顶部汇总：重绘整表会让输入框失焦
+  refreshRow(code);
+  if (el && v !== null && Math.abs((parseFloat(el.value) || 0) - v) > 1e-9) el.value = v;
+}
+function setHold(code, raw, el) {
+  const v = parseHold(raw);
+  if (v === null) delete holdMap[code]; else holdMap[code] = v;
+  saveHolds();
+  refreshRow(code);
+  if (el && v !== null && Math.abs((parseFloat(el.value) || 0) - v) > 1e-9) el.value = v;
+}
+function clearCosts() {
+  if (!Object.keys(costMap).length && !Object.keys(holdMap).length) {
+    toast('还没填过成本 / 持仓'); return;
+  }
+  if (!confirm('清空所有自选股的成本价和持仓？盈亏列会一起清掉。')) return;
+  costMap = {}; holdMap = {};
+  saveCosts(); saveHolds();
+  if (panelMode === 'watch') openWatchPanel();
+  toast('已清空成本与持仓');
+}
+function rowStock(code) {
+  return spRows.filter(x => x.code === code)[0] || universe().get(code) || null;
+}
+// 金额格式化：≥1 亿 → 亿，≥1 万 → 万，否则整数元；正值带 +
+function fmtMoney(v) {
+  if (v === null || v === undefined || !isFinite(v)) return '--';
+  const sign = v > 0 ? '+' : '';
+  const a = Math.abs(v);
+  if (a >= 1e8) return sign + (v / 1e8).toFixed(2) + '亿';
+  if (a >= 1e4) return sign + (v / 1e4).toFixed(2) + '万';
+  return sign + v.toFixed(0);
+}
+function fmtHands(h) { return String(Math.round(h * 100) / 100); }
+// 行内数字输入框（成本 / 手数共用）。用 text + inputmode=decimal：
+// type=number 在滚轮 / 中文输入法下容易被误改，而且会带上 spinner
+function acctInput(cls, code, value, placeholder, title, setter) {
+  return '<td class="cost-cell"><input class="cost-input' + (cls ? ' ' + cls : '') + '" type="text" inputmode="decimal"'
+    + ' placeholder="' + placeholder + '" title="' + title + '"'
+    + ' value="' + (value === null ? '' : value) + '"'
+    + ' oninput="' + setter + '(\'' + code + '\', this.value, this)"'
+    + ' onkeydown="if(event.key===\'Enter\')this.blur()"'
+    + ' onclick="event.stopPropagation()"></td>';
+}
+
+// 就地改单元格文字与颜色（不替换节点）→ 正在输入的框不会失焦
+function refreshRow(code) {
+  const row = document.querySelector('#spBody tr[data-code="' + code + '"]');
+  const s = rowStock(code);
+  if (row) {
+    const p = s ? pnlOf(s) : null;
+    const pctTd = row.querySelector('td.pnl-cell');
+    if (pctTd) {
+      pctTd.textContent = p === null ? '--' : (p > 0 ? '+' : '') + p.toFixed(2) + '%';
+      pctTd.style.color = p === null ? 'var(--dim)' : p > 0 ? 'var(--red)' : p < 0 ? 'var(--green)' : 'var(--dim)';
+      pctTd.style.fontWeight = p === null ? '' : '600';
+    }
+    const a = s ? pnlAmtOf(s) : null;
+    const amtTd = row.querySelector('td.pnl-amt-cell');
+    if (amtTd) {
+      amtTd.textContent = a === null ? '--' : fmtMoney(a);
+      amtTd.style.color = a === null ? 'var(--dim)' : a > 0 ? 'var(--red)' : a < 0 ? 'var(--green)' : 'var(--dim)';
+      amtTd.style.fontWeight = a === null ? '' : '600';
+    }
+    const d = s ? dayPnlOf(s) : null;
+    const dayTd = row.querySelector('td.day-pnl-cell');
+    if (dayTd) {
+      dayTd.textContent = d === null ? '--' : fmtMoney(d);
+      dayTd.style.color = d === null ? 'var(--dim)' : d > 0 ? 'var(--red)' : d < 0 ? 'var(--green)' : 'var(--dim)';
+      dayTd.style.fontWeight = d === null ? '' : '600';
+    }
+  }
+  updateCostSummary();
+  renderLedger();
+}
+function pnlCellHtml(code) {
+  const s = rowStock(code);
+  const p = s ? pnlOf(s) : null;
+  if (p === null) return '<td class="pnl-cell" style="color:var(--dim)">--</td>';
+  const c = p > 0 ? 'var(--red)' : p < 0 ? 'var(--green)' : 'var(--dim)';
+  return '<td class="pnl-cell" style="color:' + c + ';font-weight:600">'
+    + (p > 0 ? '+' : '') + p.toFixed(2) + '%</td>';
+}
+function pnlAmtCellHtml(code) {
+  const s = rowStock(code);
+  const a = s ? pnlAmtOf(s) : null;
+  if (a === null) return '<td class="pnl-amt-cell" style="color:var(--dim)">--</td>';
+  const c = a > 0 ? 'var(--red)' : a < 0 ? 'var(--green)' : 'var(--dim)';
+  return '<td class="pnl-amt-cell" style="color:' + c + ';font-weight:600">' + fmtMoney(a) + '</td>';
+}
+function dayPnlCellHtml(code) {
+  const s = rowStock(code);
+  const d = s ? dayPnlOf(s) : null;
+  if (d === null) return '<td class="day-pnl-cell" style="color:var(--dim)">--</td>';
+  const c = d > 0 ? 'var(--red)' : d < 0 ? 'var(--green)' : 'var(--dim)';
+  return '<td class="day-pnl-cell" style="color:' + c + ';font-weight:600">' + fmtMoney(d) + '</td>';
+}
+
+/* ── 账本条 ──
+   为什么放在"账号条下面、表格上面"：它是整个自选的总账，必须一眼看到，
+   而且不能跟着表格横向滚动（表格有 26 列，合计放在表尾会滚出视野）。
+   ⚠️ 持仓成本总额是真实算出来的（Σ 成本 × 手数 × 100），
+      所以这里的收益率是按持仓成本加权的真值，不是"各只收益率平均"。 */
+function ledgerStats() {
+  let mv = 0, pnl = 0, amtN = 0, day = 0, dayN = 0, hands = 0, cost = 0;
+  for (const s of spRows) {
+    const h = holdOf(s.code);
+    if (h) hands += h;
+    const m = mvOf(s); if (m !== null) mv += m;
+    const a = pnlAmtOf(s); if (a !== null) { pnl += a; amtN++; cost += costOf(s.code) * h * 100; }
+    const d = dayPnlOf(s); if (d !== null) { day += d; dayN++; }
+  }
+  return { mv, pnl, amtN, day, dayN, hands, cost };
+}
+function renderLedger() {
+  const el = document.getElementById('spLedger');
+  if (!el) return;
+  if (panelMode !== 'watch' || !spRows.length) { el.hidden = true; el.innerHTML = ''; return; }
+  const st = ledgerStats();
+  if (!st.hands && !st.amtN) { el.hidden = true; el.innerHTML = ''; return; }
+  el.hidden = false;
+  const pnlColor = !st.amtN ? 'var(--dim)'
+    : st.pnl > 0 ? 'var(--red)' : st.pnl < 0 ? 'var(--green)' : 'var(--text-hi)';
+  const dayColor = !st.dayN ? 'var(--dim)'
+    : st.day > 0 ? 'var(--red)' : st.day < 0 ? 'var(--green)' : 'var(--text-hi)';
+  const rate = st.cost > 0 ? st.pnl / st.cost * 100 : null;
+  const item = (label, value, color, cls, sub) =>
+    '<span class="lg-item"><span class="lg-label">' + label + '</span>'
+    + '<span class="lg-val' + (cls ? ' ' + cls : '') + '"' + (color ? ' style="color:' + color + '"' : '') + '>'
+    + value + '</span>' + (sub || '') + '</span>';
+  el.innerHTML =
+      item('总浮动盈亏', st.amtN ? fmtMoney(st.pnl) : '--', pnlColor, 'main',
+           rate === null ? '' : '<span class="lg-sub" style="color:' + pnlColor + '">'
+             + (rate > 0 ? '+' : '') + rate.toFixed(2) + '%</span>')
+    + item('当日盈亏', st.dayN ? fmtMoney(st.day) : '--', dayColor)
+    + item('总市值', st.mv > 0 ? fmtMoney(st.mv).replace(/^\+/, '') : '--', '')
+    + item('持仓', st.hands ? fmtHands(st.hands) + '<span class="lg-sub"> 手</span>' : '--', '')
+    + (st.cost > 0 ? item('持仓成本', fmtMoney(st.cost).replace(/^\+/, ''), '') : '');
+}
+// 自选面板顶部说明：只报「填了多少只、盈几只、亏几只」。
+// 金额合计交给账本条（那里字号更大、不随表格滚动），这里不重复占地方
+function costSummaryText() {
+  const filled = watchlist.filter(c => costOf(c)).length;
+  const held = watchlist.filter(c => holdOf(c)).length;
+  if (!filled && !held) return '';
+  let up = 0, down = 0;
+  for (const s of spRows) {
+    const p = pnlOf(s);
+    if (p === null) continue;
+    if (p > 0) up++; else if (p < 0) down++;
+  }
+  if (filled) return ' · 已填成本 ' + filled + ' 只（盈 ' + up + ' / 亏 ' + down + '）';
+  return ' · 已填持仓 ' + held + ' 只';
+}
+function updateCostSummary() {
+  const el = document.getElementById('spNote');
+  if (!el || panelMode !== 'watch') return;
+  const txt = spBaseNote + costSummaryText();
+  el.textContent = txt;
+  el.hidden = !txt;
 }
 
 /* ── 自选怎么保存：两个方案，用户自己选 ─────────────────────────────
@@ -2736,14 +3564,34 @@ function scheduleWlPush() {
 }
 async function wlPush(silent) {
   if (!wlAccount) return false;
-  const res = await wlApi('/watchlist', 'PUT', { codes: watchlist });
+  const res = await wlApi('/watchlist', 'PUT', { codes: watchlist, costs: costMap, holds: holdMap });
   if (res.http === 401) { wlAuthLost(); return false; }
   if (!res.body || !res.body.ok) {
     if (!silent) toast(res.http === 0 ? '连不上服务器，稍后再试' : '同步失败，稍后会自动重试');
     return false;
   }
+  _clearLedgerDirty();          // 推上去了，换设备登录就能看到
   if (!silent) toast('已同步 ' + (res.body.codes || []).length + ' 只到账号 ' + wlAccount.user);
   return true;
+}
+
+// 两个 {代码: 数值} 字典内容是否一致（不看键顺序）
+function _sameLedgerObj(a, b) {
+  const ka = Object.keys(a || {}), kb = Object.keys(b || {});
+  if (ka.length !== kb.length) return false;
+  return ka.every(k => Number(a[k]) === Number(b[k]));
+}
+/* 记账合并（纯函数，便于单测）：
+   localFirst=true  → 本地覆盖账号（本地刚改过）
+   localFirst=false → 账号覆盖本地，但**保留本地独有的代码**
+   两种情况下，另一方独有的代码都不会丢 —— 换设备/首次登录都不会清空谁的数据 */
+function mergeLedger(localCosts, localHolds, serverCosts, serverHolds, localFirst) {
+  const lc = localCosts || {}, lh = localHolds || {};
+  const sc = serverCosts || {}, sh = serverHolds || {};
+  return {
+    costs: localFirst ? Object.assign({}, sc, lc) : Object.assign({}, lc, sc),
+    holds: localFirst ? Object.assign({}, sh, lh) : Object.assign({}, lh, sh),
+  };
 }
 // 两边并集：本机 + 云端都不丢，然后把合并结果推回去
 async function wlSync(silent) {
@@ -2760,12 +3608,37 @@ async function wlSync(silent) {
   let added = 0;
   for (const c of server) if (watchlist.indexOf(c) < 0) { watchlist.push(c); added++; }
   if (added) saveWatchlist();
+
+  /* ── 记账（成本 / 持仓）同步 ──
+     last-write-wins：
+       · 本地改过（ledgerDirty）或账号里还是空的 → 本地优先
+       · 否则账号优先，但**保留本地独有的代码**（不清空用户在新设备上刚填的）
+     ⚠️ 这条规则同时负责"老数据迁移"：修复前填的成本没有脏标记，
+        账号里又是空的 → 会判成本地优先并上传，不会被空值覆盖。 */
+  const sCosts = (res.body.costs && typeof res.body.costs === 'object') ? res.body.costs : {};
+  const sHolds = (res.body.holds && typeof res.body.holds === 'object') ? res.body.holds : {};
+  loadCosts(); loadHolds();
+  const serverN = Object.keys(sCosts).length + Object.keys(sHolds).length;
+  let ledgerMerged = false;
+  if (Object.keys(costMap).length + Object.keys(holdMap).length || serverN) {
+    const localFirst = ledgerDirty || !serverN;
+    const m = mergeLedger(costMap, holdMap, sCosts, sHolds, localFirst);
+    if (!_sameLedgerObj(m.costs, costMap) || !_sameLedgerObj(m.holds, holdMap)) {
+      _writeLedger(m.costs, m.holds);
+      ledgerMerged = true;
+    }
+  }
+
   await wlPush(true);
   updateWatchCount();
   syncStars();
   if (panelMode === 'watch') openWatchPanel();
-  if (!silent) toast(added ? ('已合并：本机 ' + before + ' 只 + 云端新增 ' + added + ' 只')
-                           : ('已是最新，共 ' + watchlist.length + ' 只'));
+  if (!silent) {
+    const nAcct = Object.keys(costMap).length + Object.keys(holdMap).length;
+    if (added) toast('已合并：本机 ' + before + ' 只 + 云端新增 ' + added + ' 只');
+    else if (ledgerMerged && nAcct) toast('已同步，共 ' + watchlist.length + ' 只 · 记账 ' + nAcct + ' 条');
+    else toast('已是最新，共 ' + watchlist.length + ' 只');
+  }
 }
 function wlAuthLost() {
   wlAccount = null; saveAccount(); renderAccountBar();
@@ -2856,6 +3729,683 @@ function updateWatchCount() {
   const b = document.getElementById('btnWatch');
   if (b) b.classList.toggle('active', panelMode === 'watch' && watchlist.length > 0);
 }
+/* ── K 线看板 ──────────────────────────────────────────────────
+   数据走后端 /api/kline（浏览器直连东财会被跨域拦掉）。
+   季K/年K 是后端用月K聚合的 —— 东财只到月K，没有原生季/年。
+   MA 与 MACD 在这里现算：都只依赖收盘价，不用再发请求。 */
+const KL_PERIODS = [
+  { key: 'day', label: '日K' }, { key: 'week', label: '周K' }, { key: 'month', label: '月K' },
+  { key: 'quarter', label: '季K' }, { key: 'year', label: '年K' },
+];
+const KL_BARS = { day: 120, week: 120, month: 96, quarter: 60, year: 30 };
+const KL_MA_COLORS = { 5: '#c48a4d', 10: '#3876b9', 20: '#8b5cf6', 60: '#9aa5b1' };
+const KL_BAR_MA = '#8b5cf6';   // 指标图均线：紫，和红绿柱、蓝柱都不撞色
+let klState = { code: '', name: '', period: 'day', data: null, reqId: 0 };
+
+function klMA(closes, n) {
+  const out = []; let sum = 0;
+  for (let i = 0; i < closes.length; i++) {
+    sum += closes[i];
+    if (i >= n) sum -= closes[i - n];
+    out.push(i >= n - 1 ? sum / n : null);
+  }
+  return out;
+}
+/* 指标图的均线窗口：按「这张图展示多少根」自适应，取根数 ÷ 6，最少 3 根。
+   日K 120 根 → MA20；财务只有 8 期 → MA3；年K 30 根 → MA5。
+   不写死 5/10/20：财务是季度、资金是日，同一个数字代表的时间差 90 倍。 */
+function klMAWindow(n) {
+  if (!n || n < 3) return Math.max(2, n || 2);
+  if (n <= 8) return 3;
+  return Math.max(3, Math.min(60, Math.round(n / 6)));
+}
+
+/* 带缺值的移动平均：null 不参与、也不输出；缺口后重新攒满 win 个才恢复。
+   攒不满就留空 —— 拿 1 个点冒充均线比没有线更误导。 */
+function klMovAvg(values, win) {
+  const out = new Array(values.length).fill(null);
+  const q = []; let sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (v === null || v === undefined || v !== v) { q.length = 0; sum = 0; continue; }
+    q.push(v); sum += v;
+    if (q.length > win) sum -= q.shift();
+    if (q.length === win) out[i] = sum / win;
+  }
+  return out;
+}
+function klEMA(vals, n) {
+  const k = 2 / (n + 1); let prev = null;
+  return vals.map(v => {
+    if (v === null || v === undefined) return null;
+    prev = prev === null ? v : v * k + prev * (1 - k);
+    return prev;
+  });
+}
+function klMACD(closes) {
+  const e12 = klEMA(closes, 12), e26 = klEMA(closes, 26);
+  const dif = closes.map((_, i) =>
+    (e12[i] === null || e26[i] === null) ? null : e12[i] - e26[i]);
+  const dea = klEMA(dif, 9);
+  const bar = dif.map((d, i) =>
+    (d === null || dea[i] === null) ? null : (d - dea[i]) * 2);
+  return { dif: dif, dea: dea, bar: bar };
+}
+function klAmt(yuan) {
+  if (!(yuan > 0)) return '--';
+  return yuan >= 1e8 ? (yuan / 1e8).toFixed(2) + '亿' : (yuan / 1e4).toFixed(0) + '万';
+}
+function klPct(v) {
+  if (v === null || v === undefined || v !== v) return '--';
+  return (v > 0 ? '+' : '') + Number(v).toFixed(2) + '%';
+}
+function klColor(v) { return v > 0 ? 'var(--red)' : v < 0 ? 'var(--green)' : 'var(--dim)'; }
+
+// 名称 → 可点。只加虚线下划线，不改颜色：整张表都是股票名，全变蓝太吵
+function nameLink(code, name) {
+  const safe = String(name == null ? '' : name)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  return '<span class="stock-link" title="点击看 日/周/月/季/年 K 线"'
+    + ' onclick="openKline(\'' + code + '\')">' + safe + '</span>';
+}
+
+/* 指标清单。kind 决定数据源与画法：
+   price → 价格K线（含蜡烛/量/MACD）；price 里的 amount/turnover 用同一份K线数据画柱；
+   flow  → 个股资金流（上游只有 120 个交易日）；fin → 季度财报（固定季度频率）。 */
+const KL_METRICS = [
+  { key: 'price',    label: '股价',     kind: 'price' },
+  { key: 'amount',   label: '成交额',   kind: 'price' },
+  { key: 'turnover', label: '换手率',   kind: 'price' },
+  { key: 'main',     label: '主力净额', kind: 'flow' },
+  { key: 'retail',   label: '散户净额', kind: 'flow' },
+  { key: 'medium',   label: '中单净额', kind: 'flow' },
+  { key: 'ratio',    label: '净额占比', kind: 'flow' },
+  { key: 'rev',      label: '单季营收', kind: 'fin' },
+  { key: 'np',       label: '单季净利', kind: 'fin' },
+  { key: 'roe',      label: 'ROE',      kind: 'fin' },
+  { key: 'gross',    label: '毛利率',    kind: 'fin' },
+];
+function KL_METRIC(k) {
+  return KL_METRICS.filter(m => m.key === k)[0] || KL_METRICS[0];
+}
+
+// 前端 5 分钟缓存：来回切周期/指标不重复打后端
+const KL_MEM = new Map();
+function klGet(url) {
+  const hit = KL_MEM.get(url);
+  if (hit && Date.now() - hit.t < 300000) return Promise.resolve(hit.v);
+  return fetch(url).then(r => r.json()).then(j => {
+    if (j && j.ok) KL_MEM.set(url, { t: Date.now(), v: j });
+    return j;
+  });
+}
+
+function openKline(code) {
+  let nm = code;
+  try {
+    const s = universe().get(code);
+    if (s && s.name) nm = s.name;
+  } catch (e) {}
+  klState = { code: code, name: nm, period: 'day', metric: 'price',
+              price: null, flow: null, fin: null, reqId: klState.reqId };
+  document.getElementById('klOverlay').hidden = false;
+  document.getElementById('klName').textContent = nm;
+  document.getElementById('klCode').textContent = code;
+  document.getElementById('klHover').innerHTML = '';
+  document.getElementById('klStats').innerHTML = '';
+  document.getElementById('klFoot').textContent = '';
+  document.getElementById('klChart').innerHTML = '<div class="kl-loading">加载中…</div>';
+  renderKlMetrics();
+  renderKlPeriods();
+  klLoad();
+}
+function closeKline() {
+  document.getElementById('klOverlay').hidden = true;
+  klState.reqId++;                       // 让在途请求作废
+  klState.price = klState.flow = klState.fin = null;
+}
+function renderKlMetrics() {
+  let html = '', lastKind = null;
+  KL_METRICS.forEach(m => {
+    if (lastKind && m.kind !== lastKind) html += '<span class="kl-sep"></span>';
+    lastKind = m.kind;
+    html += '<button class="kl-m' + (klState.metric === m.key ? ' active' : '') + '"'
+      + ' onclick="klSetMetric(\'' + m.key + '\')">' + m.label + '</button>';
+  });
+  document.getElementById('klMetrics').innerHTML = html;
+}
+function renderKlPeriods() {
+  const kind = KL_METRIC(klState.metric).kind;
+  document.getElementById('klPeriods').innerHTML = KL_PERIODS.map(p => {
+    // 财务是季度频率，周期切换对它没意义；资金流只有 120 个交易日，季/年聚不出东西
+    const finCase = (kind === 'fin');
+    const flowCase = (kind === 'flow' && (p.key === 'quarter' || p.key === 'year'));
+    const off = finCase || flowCase;
+    const tip = finCase ? '财务指标按季度披露，不受周期切换影响'
+                        : '资金流历史只到 120 个交易日，这个周期画不出有意义的图';
+    return '<button class="kl-p' + (klState.period === p.key ? ' active' : '') + '"'
+      + (off ? ' disabled title="' + tip + '"' : '')
+      + ' onclick="loadKline(\'' + p.key + '\')">' + p.label + '</button>';
+  }).join('');
+}
+function klSetMetric(key) {
+  if (klState.metric === key) return;
+  klState.metric = key;
+  renderKlMetrics();
+  renderKlPeriods();
+  klLoad();
+}
+function loadKline(period) {
+  const kind = KL_METRIC(klState.metric).kind;
+  if (kind === 'flow' && (period === 'quarter' || period === 'year')) return;
+  if (kind === 'fin') return;
+  klState.period = period;
+  renderKlPeriods();
+  klLoad();
+}
+function klLoad() {
+  const m = KL_METRIC(klState.metric);
+  const q = 'code=' + encodeURIComponent(klState.code);
+  const rid = ++klState.reqId;
+  const box = document.getElementById('klChart');
+  box.innerHTML = '<div class="kl-loading">加载中…</div>';
+  // 清掉上一张图残留的悬停信息（否则切指标后顶部还显示上一张图的日期与价格）
+  document.getElementById('klHover').innerHTML = '';
+
+  const jobs = [];
+  if (m.kind === 'fin') {
+    if (!klState.fin) jobs.push(klGet('/api/fin?' + q + '&n=12').then(j => { klState.fin = j; }));
+  } else {
+    jobs.push(klGet('/api/kline?' + q + '&period=' + klState.period)
+      .then(j => { klState.price = j; }));
+    if (m.kind === 'flow') {
+      jobs.push(klGet('/api/flow?' + q + '&period=' + klState.period)
+        .then(j => { klState.flow = j; }));
+    }
+  }
+  Promise.all(jobs).then(() => {
+    if (rid !== klState.reqId) return;
+    const bad = [klState.price, klState.flow, klState.fin].filter(x => x && x.ok === false)[0];
+    if (bad) throw new Error(bad.message || '接口没有返回数据');
+    klDraw();
+  }).catch(e => {
+    if (rid !== klState.reqId) return;
+    box.innerHTML = '<div class="kl-error">取不到数据：' + String(e.message || e) + '</div>';
+    document.getElementById('klFoot').textContent =
+      '数据源：东方财富（经本站代理）。取不到就直接报错，不做任何估算。';
+  });
+}
+function klDraw() {
+  const m = KL_METRIC(klState.metric);
+  if (m.kind === 'fin') return renderFinChart(m);
+  if (m.kind === 'flow') return renderFlowChart(m);
+  if (m.key === 'price') return renderPriceChart();
+  return renderPriceMetric(m);
+}
+
+function klHoverInfo(idx, x) {
+  const d = klState.price;
+  if (!d || !d.rows || !d.rows.length) return;
+  const rows = d.rows;
+  const i = Math.max(0, Math.min(rows.length - 1, idx));
+  const r = rows[i];
+  const prev = i > 0 ? rows[i - 1][2] : r[1];
+  const chg = prev > 0 ? (r[2] / prev - 1) * 100 : null;
+  document.getElementById('klHover').innerHTML =
+    '<b>' + r[0] + '</b><br>'
+    + '开 ' + r[1].toFixed(2) + '　高 ' + r[3].toFixed(2)
+    + '　低 ' + r[4].toFixed(2) + '　收 <b>' + r[2].toFixed(2) + '</b><br>'
+    + '涨跌 <b style="color:' + klColor(chg) + '">' + klPct(chg) + '</b>'
+    + '　成交 <b>' + klAmt(r[6]) + '</b>'
+    + (r[9] !== null && r[9] !== undefined ? '　换手 <b>' + r[9].toFixed(2) + '%</b>' : '');
+  const cr = document.getElementById('klCross');
+  if (cr && x !== undefined) {
+    cr.setAttribute('x1', x); cr.setAttribute('x2', x); cr.setAttribute('opacity', '.85');
+  }
+}
+
+function renderPriceChart() {
+  const d = klState.price;
+  if (!d) return;
+  const rows = d.rows || [];
+  if (!rows.length) {
+    document.getElementById('klChart').innerHTML = '<div class="kl-error">没有可画的数据</div>';
+    return;
+  }
+  const closes = rows.map(r => r[2]);
+  const ma = { 5: klMA(closes, 5), 10: klMA(closes, 10), 20: klMA(closes, 20), 60: klMA(closes, 60) };
+  const macd = klMACD(closes);
+
+  const n = Math.min(KL_BARS[d.period] || 120, rows.length);
+  const from = rows.length - n;
+
+  const W = 960, padL = 6, padR = 64;
+  const mainT = 12, mainB = 246, volT = 268, volB = 318, macdT = 340, macdB = 424;
+  const H = 446;
+  const plotW = W - padL - padR;
+  const barW = plotW / n;
+  const cw = Math.max(1.2, Math.min(9, barW * 0.62));
+
+  let lo = Infinity, hi = -Infinity;
+  for (let i = from; i < rows.length; i++) {
+    const r = rows[i];
+    if (r[4] < lo) lo = r[4];
+    if (r[3] > hi) hi = r[3];
+    [5, 10, 20, 60].forEach(k => {
+      const v = ma[k][i];
+      if (v !== null) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    });
+  }
+  const pad = (hi - lo) * 0.06 || 1;
+  lo = Math.max(0, lo - pad);        // 价格不会是负数，别把纵轴拉到 0 以下
+  hi += pad;
+  const yMain = v => mainT + (hi - v) / (hi - lo) * (mainB - mainT);
+  const xAt = i => padL + (i - from + 0.5) * barW;
+
+  let vmax = 0;
+  for (let i = from; i < rows.length; i++) vmax = Math.max(vmax, rows[i][5] || 0);
+  vmax = vmax || 1;
+  const yVol = v => volB - (v / vmax) * (volB - volT);
+
+  let mmax = 0;
+  for (let i = from; i < rows.length; i++) {
+    mmax = Math.max(mmax, Math.abs(macd.bar[i] || 0),
+                    Math.abs(macd.dif[i] || 0), Math.abs(macd.dea[i] || 0));
+  }
+  mmax = mmax || 1;
+  const midM = (macdT + macdB) / 2;
+  const yM = v => midM - (v / mmax) * ((macdB - macdT) / 2 - 5);
+
+  let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="K 线图">';
+
+  // 价格网格 + 右侧刻度
+  for (let g = 0; g <= 4; g++) {
+    const v = lo + (hi - lo) * g / 4;
+    const y = yMain(v);
+    svg += '<line x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (W - padR)
+      + '" y2="' + y.toFixed(1) + '" stroke="#eef0f3" stroke-width="1"/>'
+      + '<text x="' + (W - padR + 6) + '" y="' + (y + 3.5).toFixed(1)
+      + '" font-size="10" fill="#9aa5b1">' + v.toFixed(2) + '</text>';
+  }
+  // 量 / MACD 分隔线
+  svg += '<line x1="' + padL + '" y1="' + volT + '" x2="' + (W - padR) + '" y2="' + volT
+    + '" stroke="#f2f4f6" stroke-width="1"/>'
+    + '<line x1="' + padL + '" y1="' + macdT + '" x2="' + (W - padR) + '" y2="' + macdT
+    + '" stroke="#f2f4f6" stroke-width="1"/>'
+    + '<line x1="' + padL + '" y1="' + midM + '" x2="' + (W - padR) + '" y2="' + midM
+    + '" stroke="#e8ebef" stroke-width="1" stroke-dasharray="2 3"/>';
+
+  // 蜡烛 + 量柱
+  for (let i = from; i < rows.length; i++) {
+    const r = rows[i];
+    const x = xAt(i);
+    const up = r[2] >= r[1];
+    const cls = up ? 'kl-up' : 'kl-dn';
+    svg += '<line x1="' + x.toFixed(1) + '" y1="' + yMain(r[3]).toFixed(1)
+      + '" x2="' + x.toFixed(1) + '" y2="' + yMain(r[4]).toFixed(1)
+      + '" class="' + cls + '" stroke-width="1"/>';
+    const y1 = yMain(Math.max(r[1], r[2])), y2 = yMain(Math.min(r[1], r[2]));
+    svg += '<rect x="' + (x - cw / 2).toFixed(1) + '" y="' + y1.toFixed(1)
+      + '" width="' + cw.toFixed(1) + '" height="' + Math.max(1, y2 - y1).toFixed(1)
+      + '" class="' + cls + '"/>';
+    svg += '<rect x="' + (x - cw / 2).toFixed(1) + '" y="' + yVol(r[5] || 0).toFixed(1)
+      + '" width="' + cw.toFixed(1) + '" height="' + Math.max(0.5, volB - yVol(r[5] || 0)).toFixed(1)
+      + '" class="' + cls + '" opacity=".55"/>';
+  }
+
+  // 均线
+  [5, 10, 20, 60].forEach(k => {
+    let dd = '';
+    for (let i = from; i < rows.length; i++) {
+      const v = ma[k][i];
+      if (v === null) continue;
+      dd += (dd ? 'L' : 'M') + xAt(i).toFixed(1) + ' ' + yMain(v).toFixed(1);
+    }
+    if (dd) {
+      svg += '<path d="' + dd + '" fill="none" stroke="' + KL_MA_COLORS[k]
+        + '" stroke-width="1.2" opacity=".9"/>';
+    }
+  });
+
+  // MACD 柱 + 两条线
+  for (let i = from; i < rows.length; i++) {
+    const v = macd.bar[i];
+    if (v === null) continue;
+    const x = xAt(i);
+    const y0 = yM(0), y1 = yM(v);
+    svg += '<rect x="' + (x - cw / 2).toFixed(1) + '" y="' + Math.min(y0, y1).toFixed(1)
+      + '" width="' + cw.toFixed(1) + '" height="' + Math.max(0.5, Math.abs(y1 - y0)).toFixed(1)
+      + '" class="' + (v >= 0 ? 'kl-up' : 'kl-dn') + '" opacity=".6"/>';
+  }
+  [['dif', '#3876b9'], ['dea', '#d97706']].forEach(pair => {
+    const arr = macd[pair[0]];
+    let dd = '';
+    for (let i = from; i < rows.length; i++) {
+      const v = arr[i];
+      if (v === null) continue;
+      dd += (dd ? 'L' : 'M') + xAt(i).toFixed(1) + ' ' + yM(v).toFixed(1);
+    }
+    if (dd) svg += '<path d="' + dd + '" fill="none" stroke="' + pair[1] + '" stroke-width="1.1"/>';
+  });
+
+  // 区块标题
+  svg += '<text x="' + padL + '" y="' + (volT - 6) + '" font-size="9.5" fill="#9aa5b1">成交量</text>'
+    + '<text x="' + padL + '" y="' + (macdT - 6) + '" font-size="9.5" fill="#9aa5b1">MACD(12,26,9)</text>';
+
+  // 日期刻度（第一个用 start 锚点，否则居中会被左边界裁掉）
+  const step = Math.max(1, Math.floor(n / 6));
+  for (let i = from; i < rows.length; i += step) {
+    const isFirst = (i === from);
+    svg += '<text x="' + (isFirst ? padL : xAt(i)).toFixed(1) + '" y="' + (H - 10)
+      + '" font-size="9.5" fill="#9aa5b1" text-anchor="' + (isFirst ? 'start' : 'middle')
+      + '">' + rows[i][0].slice(2) + '</text>';
+  }
+
+  // 悬停竖线 + 每列的透明热区（放最后，保证能接到鼠标）
+  svg += '<line id="klCross" x1="0" y1="' + mainT + '" x2="0" y2="' + macdB
+    + '" stroke="#b9c1c9" stroke-width="1" stroke-dasharray="3 3" opacity="0"/>';
+  for (let i = from; i < rows.length; i++) {
+    svg += '<rect x="' + (padL + (i - from) * barW).toFixed(1) + '" y="' + mainT
+      + '" width="' + barW.toFixed(1) + '" height="' + (macdB - mainT)
+      + '" fill="transparent" onmouseenter="klHoverInfo(' + i + ',' + xAt(i).toFixed(1) + ')"/>';
+  }
+  svg += '</svg>';
+
+  document.getElementById('klChart').innerHTML = svg;
+
+  // 区间统计：说的是「图上这段」，不是全历史，标题里写清楚
+  const first = rows[from], lastR = rows[rows.length - 1];
+  const cumAmt = rows.slice(from).reduce((a, r) => a + (r[6] || 0), 0);
+  const hiAll = Math.max.apply(null, rows.slice(from).map(r => r[3]));
+  const loAll = Math.min.apply(null, rows.slice(from).map(r => r[4]));
+  const span = first[1] > 0 ? (lastR[2] / first[1] - 1) * 100 : null;
+  document.getElementById('klStats').innerHTML =
+    '区间 <b>' + first[0].slice(2) + ' → ' + lastR[0].slice(2) + '</b>'
+    + '　涨跌 <b style="color:' + klColor(span) + '">' + klPct(span) + '</b>'
+    + '　高 <b>' + hiAll.toFixed(2) + '</b> 低 <b>' + loAll.toFixed(2) + '</b>'
+    + '　累计成交 <b>' + klAmt(cumAmt) + '</b>';
+
+  document.getElementById('klFoot').textContent = [
+    d.source ? '数据源：' + d.source : '',
+    '价格与页面现价一致；除权日会有缺口（这是真实价格，不是数据错）',
+    d.partial ? '最后一根是未走完的周期（实时值，不是定稿）' : '最后一根为已结束周期',
+    '共 ' + rows.length + ' 根，图中显示最近 ' + n + ' 根',
+    n < 60 ? '不足 60 根的部分均线为空（MA60 需要 60 根才有值）' : '',
+    '均线 MA5/10/20/60，MACD(12,26,9)',
+  ].filter(Boolean).join('　·　');
+
+  klHoverInfo(rows.length - 1);
+}
+
+/* 通用柱状图：成交额 / 换手率 / 资金流 / 财务都用它。
+   有正负时零轴居中、红正绿负；纯正值用中性蓝（成交额不是"涨跌"，不该染红绿）。 */
+function klBarChart(cfg) {
+  klState.chart = cfg;
+  const labels = cfg.labels || [], values = cfg.values || [];
+  const fmt = cfg.fmt || (v => String(v));
+  const n = values.length;
+  const box = document.getElementById('klChart');
+  if (!n) { box.innerHTML = '<div class="kl-error">没有可画的数据</div>'; return; }
+
+  const W = 960, padL = 6, padR = 66, top = 26, bottom = 372, H = 408;
+  const plotW = W - padL - padR;
+  const step = plotW / n;
+  const bw = Math.max(1.2, Math.min(30, step * 0.66));
+
+  let hi = 0, lo = 0;
+  values.forEach(v => {
+    if (v === null || v === undefined || v !== v) return;
+    if (v > hi) hi = v;
+    if (v < lo) lo = v;
+  });
+  if (hi === 0 && lo === 0) hi = 1;
+  const pad = (hi - lo) * 0.12 || Math.abs(hi) * 0.2 || 1;
+  hi += pad;
+  if (lo < 0) lo -= pad;
+  const Y = v => bottom - (v - lo) / (hi - lo) * (bottom - top);
+  const y0 = Y(0);
+
+  /* 均线：用「完整历史」算，再截到可见区间 —— 只拿可见区间算，
+     图上最左边 win-1 根会是空的，一打开指标就"没有均线"。 */
+  const maWin = cfg.ma === false ? 0 : klMAWindow(n);
+  const maSrc = cfg.maSource || values;
+  const maFrom = cfg.maFrom || 0;
+  const ma = maWin ? klMovAvg(maSrc, maWin).slice(maFrom, maFrom + n) : null;
+  cfg.maWin = maWin; cfg.ma = ma;      // 给 hover 用
+
+  let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + (cfg.title || '指标图') + '">';
+  for (let g = 0; g <= 4; g++) {
+    const v = lo + (hi - lo) * g / 4;
+    const y = Y(v);
+    svg += '<line x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (W - padR)
+      + '" y2="' + y.toFixed(1) + '" stroke="#eef0f3" stroke-width="1"/>'
+      + '<text x="' + (W - padR + 6) + '" y="' + (y + 3.5).toFixed(1)
+      + '" font-size="10" fill="#9aa5b1">' + fmt(v, true) + '</text>';
+  }
+  if (lo < 0 && hi > 0) {
+    svg += '<line x1="' + padL + '" y1="' + y0.toFixed(1) + '" x2="' + (W - padR)
+      + '" y2="' + y0.toFixed(1) + '" stroke="#c2c9d2" stroke-width="1"/>';
+  }
+  if (cfg.title) {
+    svg += '<text x="' + padL + '" y="14" font-size="10" fill="#9aa5b1">' + cfg.title + '</text>';
+  }
+  values.forEach((v, i) => {
+    if (v === null || v === undefined || v !== v) return;
+    const x = padL + (i + 0.5) * step;
+    const y1 = Y(v);
+    const fill = !cfg.signed ? '#3876b9' : (v >= 0 ? 'var(--red)' : 'var(--green)');
+    svg += '<rect x="' + (x - bw / 2).toFixed(1) + '" y="' + Math.min(y1, y0).toFixed(1)
+      + '" width="' + bw.toFixed(1) + '" height="' + Math.max(1, Math.abs(y0 - y1)).toFixed(1)
+      + '" fill="' + fill + '" opacity=".85"/>';
+    if (cfg.topLabels && bw > 13) {
+      svg += '<text x="' + x.toFixed(1) + '" y="' + (Math.min(y1, y0) - 5).toFixed(1)
+        + '" font-size="9.5" fill="#6e6e73" text-anchor="middle">' + fmt(v) + '</text>';
+    }
+  });
+
+  // 均线（画在柱子之上，缺值处断开，不把两点直接连成直线）
+  if (ma && ma.some(v => v !== null && v !== undefined)) {
+    let dd = '', pen = false;
+    for (let i = 0; i < n; i++) {
+      const v = ma[i];
+      if (v === null || v === undefined) { pen = false; continue; }
+      dd += (pen ? 'L' : 'M') + (padL + (i + 0.5) * step).toFixed(1) + ' ' + Y(v).toFixed(1);
+      pen = true;
+    }
+    if (dd) {
+      svg += '<path d="' + dd + '" fill="none" stroke="' + KL_BAR_MA
+        + '" stroke-width="1.7" stroke-linejoin="round" opacity=".95"/>'
+        + '<line x1="' + (W - padR - 44) + '" y1="11.5" x2="' + (W - padR - 31)
+        + '" y2="11.5" stroke="' + KL_BAR_MA + '" stroke-width="1.7"/>'
+        + '<text x="' + (W - padR - 27) + '" y="14.5" font-size="10" fill="#6e6e73">MA'
+        + maWin + '</text>';
+    }
+  }
+  const s = Math.max(1, Math.floor(n / 7));
+  for (let i = 0; i < n; i += s) {
+    const isFirst = i === 0;
+    svg += '<text x="' + (isFirst ? padL : (padL + (i + 0.5) * step)).toFixed(1) + '" y="' + (H - 8)
+      + '" font-size="9.5" fill="#9aa5b1" text-anchor="' + (isFirst ? 'start' : 'middle')
+      + '">' + labels[i] + '</text>';
+  }
+  for (let i = 0; i < n; i++) {
+    svg += '<rect x="' + (padL + i * step).toFixed(1) + '" y="' + top + '" width="' + step.toFixed(1)
+      + '" height="' + (bottom - top) + '" fill="transparent" onmouseenter="klChartHover(' + i + ')"/>';
+  }
+  svg += '</svg>';
+  box.innerHTML = svg;
+  const hasMa = ma && ma.some(v => v !== null && v !== undefined);
+  document.getElementById('klFoot').textContent = [
+    cfg.note,
+    hasMa ? '紫线 MA' + maWin + '（窗口 = 图中可见 ' + n + ' 根 ÷ 6，最少 3 根）' : '',
+  ].filter(Boolean).join('　·　');
+  klChartHover(n - 1);      // 默认显示最后一根，别让顶部信息条空着
+}
+
+function klChartHover(i) {
+  const c = klState.chart;
+  if (!c) return;
+  const date = (c.fullLabels && c.fullLabels[i]) || c.labels[i];
+  let txt = (c.hoverText && c.hoverText[i]) || (c.fmt ? c.fmt(c.values[i]) : '');
+  if (c.ma && c.maWin && c.ma[i] !== null && c.ma[i] !== undefined) {
+    txt += '<br><span style="color:' + KL_BAR_MA + '">MA' + c.maWin
+      + ' <b>' + c.fmt(c.ma[i]) + '</b></span>';
+  }
+  document.getElementById('klHover').innerHTML = '<b>' + date + '</b><br>' + txt;
+}
+
+// 成交额 / 换手率：数据就来自价格K线，不额外请求
+function renderPriceMetric(m) {
+  const d = klState.price;
+  if (!d || !d.rows || !d.rows.length) {
+    document.getElementById('klChart').innerHTML = '<div class="kl-error">没有数据</div>';
+    return;
+  }
+  const rows = d.rows;
+  const n = Math.min(KL_BARS[d.period] || 120, rows.length);
+  const from = rows.length - n;
+  const view = rows.slice(from);
+  const isAmt = m.key === 'amount';
+  const pick = r => isAmt ? (r[6] || 0) / 1e8 : r[9];
+  const values = view.map(pick);
+  const fmt = (v, axis) => (v === null || v === undefined || v !== v)
+    ? '--' : (isAmt ? v.toFixed(axis ? 0 : 1) + '亿' : v.toFixed(2) + '%');
+
+  klBarChart({
+    labels: view.map(r => r[0].slice(2)),
+    fullLabels: view.map(r => r[0]),
+    values: values,
+    maSource: rows.map(pick),
+    maFrom: from,
+    fmt: fmt,
+    signed: false,
+    title: isAmt ? '成交额（亿元）' : '换手率（%）',
+    note: isAmt
+      ? '成交额 = 当日成交金额。跨股票只能比金额，不能比股数（2 元和 200 元的股票股数没有可比性）。'
+      : '换手率 = 成交股数 ÷ 流通股数，反映筹码交换的活跃度；涨停/跌停时换手率会明显失真。',
+    hoverText: view.map(r => (isAmt ? '成交额 <b>' + ((r[6] || 0) / 1e8).toFixed(2) + '亿</b>'
+                                   : '换手率 <b>' + (r[9] === null ? '--' : r[9].toFixed(2) + '%') + '</b>')
+      + '<br>收盘 <b>' + r[2].toFixed(2) + '</b>　涨跌 <b style="color:' + klColor(r[7]) + '">'
+      + klPct(r[7]) + '</b>'),
+  });
+
+  const sum = values.reduce((a, v) => a + (v || 0), 0);
+  const avg = n ? sum / n : 0;
+  document.getElementById('klStats').innerHTML =
+    '区间 <b>' + view[0][0].slice(2) + ' → ' + view[view.length - 1][0].slice(2) + '</b>'
+    + (isAmt ? '　累计 <b>' + klAmt(sum * 1e8) + '</b>　日均 <b>' + klAmt(avg * 1e8) + '</b>'
+             : '　均值 <b>' + avg.toFixed(2) + '%</b>　最高 <b>' + Math.max.apply(null, values).toFixed(2) + '%</b>');
+}
+
+// 资金流：主力 / 散户 / 中单 / 净额占比
+function renderFlowChart(m) {
+  const f = klState.flow;
+  if (!f || !f.rows || !f.rows.length) {
+    document.getElementById('klChart').innerHTML = '<div class="kl-error">没有资金流数据</div>';
+    return;
+  }
+  const rows = f.rows;
+  const n = Math.min(KL_BARS[klState.period] || 120, rows.length);
+  const from = rows.length - n;
+  const view = rows.slice(from);
+  const k = klState.price;
+  const amtBy = {};
+  if (k && k.rows) k.rows.forEach(r => { amtBy[r[0]] = r[6] || 0; });
+
+  const idx = { main: 1, retail: 2, medium: 3 }[m.key];
+  const pick = r => {
+    if (m.key === 'ratio') {
+      const a = amtBy[r[0]];
+      return (a && a > 0) ? +(r[1] / a * 100).toFixed(3) : null;
+    }
+    return (r[idx] || 0) / 1e8;
+  };
+  const values = view.map(pick);
+  let fmt, title, note;
+  if (m.key === 'ratio') {
+    fmt = (v, axis) => (v === null || v === undefined || v !== v) ? '--'
+      : v.toFixed(axis ? 1 : 2) + '%';
+    title = '主力净额 ÷ 当日成交额（%）';
+    note = '口径注意：这里的分母是「当日成交额」，不是表里的「自由流通市值」——'
+         + '历史流通市值拿不到，两个口径混着比会算错。只有当日截面才用市值口径。';
+  } else {
+    fmt = (v, axis) => (v === null || v === undefined || v !== v) ? '--'
+      : v.toFixed(axis ? 1 : 2) + '亿';
+    title = m.label + '（亿元）';
+    note = '资金流历史只到最近 120 个交易日（约半年）—— 这是数据源上限，不是本站的限制。'
+         + '净额为正=净流入、为负=净流出；四档近似守恒（小单+中单 ≈ −主力）。';
+  }
+
+  klBarChart({
+    labels: view.map(r => r[0].slice(2)),
+    fullLabels: view.map(r => r[0]),
+    values: values,
+    maSource: rows.map(pick),
+    maFrom: from,
+    fmt: fmt,
+    signed: true,
+    title: title,
+    note: note,
+    hoverText: view.map(r => '主力 <b>' + (r[1] / 1e8).toFixed(2) + '亿</b>　散户 <b>'
+      + (r[2] / 1e8).toFixed(2) + '亿</b>　中单 <b>' + (r[3] / 1e8).toFixed(2) + '亿</b><br>'
+      + '超大单 ' + (r[5] / 1e8).toFixed(2) + '亿　大单 ' + (r[4] / 1e8).toFixed(2) + '亿'),
+  });
+
+  const valid = values.filter(v => v !== null);
+  const sum = valid.reduce((a, v) => a + v, 0);
+  const label = m.key === 'ratio'
+    ? '均值 <b>' + (valid.length ? (sum / valid.length).toFixed(2) + '%' : '--') + '</b>'
+    : '累计 <b style="color:' + klColor(sum) + '">' + (sum > 0 ? '+' : '') + sum.toFixed(2) + '亿</b>';
+  document.getElementById('klStats').innerHTML =
+    '区间 <b>' + view[0][0].slice(2) + ' → ' + view[view.length - 1][0].slice(2) + '</b>　' + label;
+}
+
+// 财务：季度频率，不受日/周/月切换影响
+function renderFinChart(m) {
+  const f = klState.fin;
+  if (!f || !f.rows || !f.rows.length) {
+    document.getElementById('klChart').innerHTML = '<div class="kl-error">没有财报数据</div>';
+    return;
+  }
+  const rows = f.rows;
+  const key = { rev: 'rev_q', np: 'np_q', roe: 'roe', gross: 'gross' }[m.key];
+  const isPct = (m.key === 'roe' || m.key === 'gross');
+  const values = rows.map(r => r[key]);
+  const fmt = (v, axis) => (v === null || v === undefined || v !== v) ? '--'
+    : (isPct ? v.toFixed(axis ? 0 : 1) + '%' : v.toFixed(axis ? 0 : 1) + '亿');
+
+  const note = isPct
+    ? 'ROE 与毛利率是「年初至今累计」口径 —— 比率不做单季还原，还原反而会失真'
+      + '（分母是当期净资产，减出来的"单季比率"没有对应实体）。'
+    : '营收/净利已还原为单季（本期累计 − 上期累计）。财报原始数据是年初至今累计，'
+      + '直接画会是一条阶梯（Q1 < H1 < Q3），看不出真实的季度波动。';
+
+  klBarChart({
+    labels: rows.map(r => r.period.replace(/^20/, '')),
+    fullLabels: rows.map(r => r.period + '（' + r.date + ' 披露）'),
+    values: values,
+    fmt: fmt,
+    signed: !isPct,
+    title: m.label + (isPct ? '（%）' : '（亿元，单季）'),
+    note: note + '　数据源：东财业绩报表。',
+    topLabels: rows.length <= 12,
+    hoverText: rows.map(r => '单季营收 <b>' + (r.rev_q === null ? '--' : r.rev_q.toFixed(1) + '亿') + '</b>'
+      + '　单季净利 <b>' + (r.np_q === null ? '--' : r.np_q.toFixed(1) + '亿') + '</b><br>'
+      + 'ROE ' + (r.roe === null ? '--' : r.roe.toFixed(2) + '%')
+      + '　毛利率 ' + (r.gross === null ? '--' : r.gross.toFixed(2) + '%')),
+  });
+
+  const last = rows[rows.length - 1];
+  document.getElementById('klStats').innerHTML =
+    '最新 <b>' + last.period + '</b>　' + m.label + ' <b>' + fmt(last[key]) + '</b>'
+    + '　共 <b>' + rows.length + '</b> 期';
+}
+
+document.addEventListener('keydown', e => {
+  const ov = document.getElementById('klOverlay');
+  if (e.key === 'Escape' && ov && !ov.hidden) closeKline();
+});
+
 function starBtn(code) {
   return '<span class="star-btn' + (isWatched(code) ? ' on' : '') + '" data-star="' + code + '"'
        + ' title="加入 / 移出自选" onclick="toggleWatch(\'' + code + '\', event)"></span>';
@@ -2958,6 +4508,21 @@ function universe() {
     o.inst_delta = r.inst_delta;
     map.set(r.code, o);
   }
+  // 财报：并进同一张表（自选/速查面板要显示净利同比、ROE、报告期）
+  for (const f of (allData?.finance?.rows || [])) {
+    const o = map.get(f.code);
+    if (!o) continue;
+    o.np_yoy = f.np_yoy;
+    o.rev_yoy = f.rev_yoy;
+    o.np_qoq = f.np_qoq;
+    o.roe = f.roe;
+    o.gross = f.gross;
+    o.cash_q = f.cash_q;
+    o.rev = f.rev;
+    o.np = f.np;
+    o.fin_period = f.period;
+    o.fin_notice = f.notice;
+  }
   _universe = map;
   return map;
 }
@@ -3032,6 +4597,8 @@ function closeStockPanel() {
     p.style.display = 'none';
     p.classList.remove('panel-flow');   // 关掉就别再占着整行（下次打开按模式重新判）
   }
+  const lg = document.getElementById('spLedger');
+  if (lg) { lg.hidden = true; lg.innerHTML = ''; }   // 账本条别在关面板后留着
   updateWatchCount();
 }
 function refreshPanel() {
@@ -3044,7 +4611,8 @@ function refreshPanel() {
 function spSort(col) {
   if (spSortCol === col) spSortAsc = !spSortAsc;
   else { spSortCol = col; spSortAsc = (col === 'code' || col === 'name' || col === 'sector'); }
-  drawStockPanel(document.getElementById('spTitle').textContent, document.getElementById('spNote').textContent);
+  // note 用 spBaseNote：spNote.textContent 已经含成本汇总，再传进去会越拼越长
+  drawStockPanel(document.getElementById('spTitle').textContent, spBaseNote);
 }
 function emQuoteUrl(code) {
   const c = String(code || '');
@@ -3059,29 +4627,45 @@ function drawStockPanel(title, note) {
   panel.classList.toggle('panel-flow', panelMode === 'watch');
   document.getElementById('spTitle').textContent = title || '';
   // 说明文案要显示出来：原来这里直接清空，等于 note 参数被丢掉（顺带修回）
+  spBaseNote = note || '';
   const noteEl = document.getElementById('spNote');
-  if (noteEl) { noteEl.textContent = note || ''; noteEl.hidden = !note; }
+  if (noteEl) {
+    const txt = spBaseNote + (panelMode === 'watch' ? costSummaryText() : '');
+    noteEl.textContent = txt; noteEl.hidden = !txt;
+  }
   document.getElementById('spActions').innerHTML = (panelMode === 'watch')
     ? '<button class="sp-btn" onclick="exportWatch()">导出代码</button>'
       + '<button class="sp-btn" onclick="importWatch()">导入</button>'
-      + '<button class="sp-btn danger" onclick="clearWatch()">清空</button>'
+      + '<button class="sp-btn" onclick="clearCosts()">清空记账</button>'
+      + '<button class="sp-btn danger" onclick="clearWatch()">清空自选</button>'
     : ((spRows[0] && spRows[0].code)
         ? '<button class="sp-btn" onclick="window.open(\'' + emQuoteUrl(spRows[0].code) + '\', \'_blank\')">东财个股页</button>'
         : '');
 
-  document.getElementById('spHead').innerHTML = '<tr>' + SP_COLS.map(c => {
-    let cls = 'sortable' + (spSortCol === c.key ? (spSortAsc ? ' sort-asc' : ' sort-desc') : ' sort-none');
+  const COLS = panelCols();
+  const NOWRAP = ['cost', 'hold', 'pnl_pct', 'pnl_amt', 'day_pnl', 'fin_period'];
+  document.getElementById('spHead').innerHTML = '<tr>' + COLS.map(c => {
+    let cls = 'sortable' + (NOWRAP.indexOf(c.key) >= 0 ? ' nowrap' : '')
+      + (spSortCol === c.key ? (spSortAsc ? ' sort-asc' : ' sort-desc') : ' sort-none');
     return '<th class="' + cls + '" title="' + (c.tip || '') + '" onclick="spSort(\'' + c.key + '\')">'
       + c.label + '<span class="sort-icon"></span></th>';
   }).join('') + '</tr>';
 
   renderAccountBar();
+  renderLedger();
   const body = document.getElementById('spBody');
   if (!spRows.length) {
-    body.innerHTML = '<tr><td colspan="' + SP_COLS.length + '" style="text-align:center;color:var(--dim);padding:34px;">'
+    body.innerHTML = '<tr><td colspan="' + COLS.length + '" style="text-align:center;color:var(--dim);padding:34px;">'
       + (panelMode === 'watch' ? '自选为空 —— 在表格里点股票名前的 ☆ 添加，或用上方速查搜索' : '无匹配结果') + '</td></tr>';
     return;
   }
+  // 成本 / 持仓 / 盈亏不是数据字段，排序时现算
+  const valOf = (s, col) => col === 'cost' ? costOf(s.code)
+    : col === 'hold' ? holdOf(s.code)
+    : col === 'pnl_pct' ? pnlOf(s)
+    : col === 'pnl_amt' ? pnlAmtOf(s)
+    : col === 'day_pnl' ? dayPnlOf(s)
+    : s[col];
   let list = spRows.slice();
   if (spSortCol) {
     const col = spSortCol, asc = spSortAsc;
@@ -3090,18 +4674,34 @@ function drawStockPanel(title, note) {
         return asc ? String(a[col] || '').localeCompare(String(b[col] || ''), 'zh-CN')
                    : String(b[col] || '').localeCompare(String(a[col] || ''), 'zh-CN');
       }
-      if (col === 'sector') {
+      if (col === 'sector' || col === 'fin_period') {
         return asc ? String(a.sector || '').localeCompare(String(b.sector || ''), 'zh-CN')
                    : String(b.sector || '').localeCompare(String(a.sector || ''), 'zh-CN');
       }
-      const na = (a[col] === null || a[col] === undefined), nb = (b[col] === null || b[col] === undefined);
+      const av = valOf(a, col), bv = valOf(b, col);
+      const na = (av === null || av === undefined), nb = (bv === null || bv === undefined);
       if (na && nb) return 0;
       if (na) return 1;
       if (nb) return -1;
-      return asc ? Number(a[col]) - Number(b[col]) : Number(b[col]) - Number(a[col]);
+      return asc ? Number(av) - Number(bv) : Number(bv) - Number(av);
     });
   }
-  body.innerHTML = list.map(s => '<tr>' + SP_COLS.map(c => spCell(s, c.key)).join('') + '</tr>').join('');
+  body.innerHTML = list.map(s => '<tr data-code="' + s.code + '">'
+    + COLS.map(c => spCell(s, c.key)).join('') + '</tr>').join('');
+  applyStickyCols();
+}
+
+/* 冻结第二列的 left 偏移：列宽自适应，只能量完再写。
+   重绘/排序/换面板都要重算，所以放在 drawStockPanel 末尾统一调一次。 */
+function applyStickyCols() {
+  const box = document.querySelector('#stockPanel .wide-box');
+  if (!box) return;
+  const head = box.querySelectorAll('thead th');
+  if (head.length < 2) return;
+  const w = Math.round(head[0].getBoundingClientRect().width);
+  for (const el of box.querySelectorAll('thead th:nth-child(2), tbody td:nth-child(2)')) {
+    el.style.left = w + 'px';
+  }
 }
 
 const F2 = v => (v > 0 ? '+' : '') + v.toFixed(2);
@@ -3113,7 +4713,7 @@ const pctCell = (v, color, dp) => NULLISH(v)
 function spCell(s, key) {
   switch (key) {
     case 'code':   return '<td class="code-cell">' + s.code + '</td>';
-    case 'name':   return '<td class="name-cell">' + starBtn(s.code) + (s.name || '--') + '</td>';
+    case 'name':   return '<td class="name-cell">' + starBtn(s.code) + nameLink(s.code, s.name || '--') + '</td>';
     case 'sector': return '<td>' + (s.sector ? '<span class="tag">' + s.sector + '</span>' : '<span style="color:var(--dim)">--</span>') + '</td>';
     case 'price': {
       const cls = s.change_pct > 0 ? 'price-up' : s.change_pct < 0 ? 'price-down' : '';
@@ -3124,6 +4724,28 @@ function spCell(s, key) {
       const cls = s.change_pct > 0 ? 'price-up' : s.change_pct < 0 ? 'price-down' : '';
       return '<td class="' + cls + '">' + (s.change_pct > 0 ? '+' : '') + s.change_pct.toFixed(2) + '%</td>';
     }
+    case 'cost':
+      return acctInput('', s.code, costOf(s.code), '填成本',
+        '你的买入均价（元/股），只存本机', 'setCost');
+    case 'hold':
+      return acctInput('hold-input', s.code, holdOf(s.code), '填手数',
+        '持仓手数，1 手 = 100 股；允许小数，只存本机', 'setHold');
+    case 'pnl_pct':
+      return pnlCellHtml(s.code);
+    case 'pnl_amt':
+      return pnlAmtCellHtml(s.code);
+    case 'day_pnl':
+      return dayPnlCellHtml(s.code);
+    case 'np_yoy':
+      return finPctTd(s.np_yoy);
+    case 'roe':
+      return finNumTd(s.roe);
+    // 毛利率是"水平"不是"涨跌"，所以不给红绿：红=高毛利会被误读成涨了（与财报表同口径）
+    case 'gross':
+      return finNumTd(s.gross);
+    case 'fin_period':
+      return '<td style="' + (String(s.fin_period || '').slice(-2) === 'H1' ? 'color:var(--accent)' : '')
+        + ';white-space:nowrap">' + finPeriodLabel(s.fin_period) + '</td>';
     case 'total_amount':
       return '<td>' + (NULLISH(s.total_amount) ? '--' : s.total_amount.toFixed(2) + '<span style="color:var(--dimmer);font-size:10px">亿</span>') + '</td>';
     case 'turnover':
@@ -3234,6 +4856,27 @@ const VOLSPAN_SUBTABS = [
   {key: 'volspan_inst', label: '主力净流入'},
 ];
 
+/* 财报：一张可排序表 + 4 个快捷筛选。
+   筛选条件刻意用「相对强弱」而不是绝对高分：
+   · 业绩爆发 = 净利同比 ≥50% 且营收同比 >0 —— 光净利暴涨可能是卖资产，营收必须同步
+   · 环比加速 = 单季环比 >0 且同比 >0 —— 同比受去年基数影响，环比看的是「当下在不在加速」
+   · 现金为王 = 现金含量 ≥1 且净利同比 >0 —— 利润要有现金支撑，排除纸面利润 */
+const FINANCE_SUBTABS = [
+  {key: 'fin_all',    label: '全部'},
+  {key: 'fin_growth', label: '业绩爆发'},
+  {key: 'fin_qoq',    label: '环比加速'},
+  {key: 'fin_cash',   label: '现金为王'},
+];
+
+// 财报数值列（点列头可排序；图表也跟随当前排序列）
+const FIN_NUM_COLS = ['rev_yoy', 'np_yoy', 'np_q_yoy', 'np_qoq', 'rev_qoq', 'roe', 'gross', 'cash_q', 'rev', 'np', 'eps'];
+// 榜单口径：同比/环比绝对值超过 1000% 的多为低基数或扭亏，不参与排行（详见 getBaseList）
+const FIN_YOY_CAP = 1000;
+// 榜单口径：年初至今营收 < 1 亿的公司，增长率再高也是噪音（壳/未盈利生物医药）
+const FIN_MIN_REV = 1;
+// ROE 榜的净利门槛（亿元）：净资产极小的微利公司 ROE 会虚高到 90%+
+const FIN_MIN_NP = 1;
+
 function renderSubtabs() {
   const flowBar = document.getElementById('subtabFlow');
   const subBar = document.getElementById('subtabBar');
@@ -3254,6 +4897,12 @@ function renderSubtabs() {
     // 放量滞涨：同样隐藏一级 subtab（这里没有散户/中单/主力之分），只渲染二级
     flowBar.classList.add('hidden');
     subBar.innerHTML = VOLSPAN_SUBTABS.map(s =>
+      '<div class="subtab' + (currentSub === s.key ? ' active' : '') + '" onclick="switchSub(\'' + s.key + '\')">' + s.label + '</div>'
+    ).join('');
+  } else if (currentTab === 'finance') {
+    // 财报：隐藏资金类型一级 subtab，只渲染筛选器
+    flowBar.classList.add('hidden');
+    subBar.innerHTML = FINANCE_SUBTABS.map(s =>
       '<div class="subtab' + (currentSub === s.key ? ' active' : '') + '" onclick="switchSub(\'' + s.key + '\')">' + s.label + '</div>'
     ).join('');
   } else {
@@ -3279,6 +4928,8 @@ function switchTab(tab) {
     currentSub = FLOW_SUBTABS[currentFlow][0].key;
   } else if (tab === 'volspan') {
     currentSub = VOLSPAN_SUBTABS[0].key;
+  } else if (tab === 'finance') {
+    currentSub = FINANCE_SUBTABS[0].key;
   } else {
     currentSub = DYNAMIC_SUBTABS[0].key;
   }
@@ -3514,6 +5165,9 @@ function toggleAuto() {
 const _watchRestored = importWatchFromUrl();   // ?w= 只当一次性搬运（如从旧地址迁过来）
 cleanWatchParamFromUrl();                     // 搬完立刻把参数从地址栏抹掉
 loadWatchlist();
+loadCosts();                                  // 成本价 + 持仓（本机为主，登录后跟账号同步）
+loadHolds();
+loadLedgerDirty();                            // 上次是否有没推上去的记账改动
 loadAccount();
 updateAccountBtn();                           // 顶栏「登录 / 注册」按钮按登录态显示
 updateWatchCount();
@@ -3538,9 +5192,15 @@ document.addEventListener('keydown', e => {
   }
 });
 
-// 多标签页同步：另一个标签页改了自选（localStorage 变了），本页跟着刷新
+// 多标签页同步：另一个标签页改了自选 / 成本价（localStorage 变了），本页跟着刷新
 window.addEventListener('storage', e => {
-  if (e.key !== null && e.key !== WL_KEY) return;   // key === null 表示 localStorage.clear()
+  if (e.key === null) { loadWatchlist(); loadCosts(); loadHolds(); }  // 全清
+  else if (e.key === COST_KEY || e.key === HOLD_KEY || e.key === LEDGER_DIRTY_KEY) {
+    loadCosts(); loadHolds(); loadLedgerDirty();
+    if (panelMode === 'watch') openWatchPanel();
+    return;
+  }
+  else if (e.key !== WL_KEY) return;
   loadWatchlist();
   updateWatchCount();
   syncStars();                                       // 已渲染的表格直接改星标，不必重排
