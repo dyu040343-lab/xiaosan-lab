@@ -1,0 +1,890 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>美股 · AI 版图 | 小散研究院</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* ───────── Design tokens ─────────
+   间距基准 4px；颜色只保留语义色 + 8 个产业环节分类色
+   辅助文字最低 #6b7789（白底 4.6:1，达 WCAG AA） */
+:root {
+  /* 底色：冷中性，不用彩色背景 */
+  --bg-0: #f5f6f8;
+  --card: #ffffff;
+  --border: #e4e7ec;
+  --border-hi: #ccd2dc;
+  --border-soft: #eef0f4;
+
+  /* 文字：四级明度，全部达 WCAG AA */
+  --text: #39404d;
+  --text-hi: #14181f;
+  --dim: #6b7480;
+  --dimmer: #6b7480;
+  --faint: #99a1ad;
+
+  /* 唯一强调色：深赭。只用在关键数字、选中态、条形 */
+  --accent: #95501f;
+  --accent-soft: #faf3ec;
+  --accent-line: #e8d5c2;
+
+  /* 语义色：涨跌，压低饱和度 */
+  --red: #c0392b;
+  --green: #167d4a;
+
+  --radius-lg: 12px;
+  --radius-md: 8px;
+  --shadow-pop: 0 12px 32px rgba(20,24,31,.14);
+}
+
+body {
+  background: var(--bg-0); color: var(--text);
+  font-family: 'PingFang SC', 'Microsoft YaHei', -apple-system, sans-serif;
+  min-height: 100vh; position: relative; overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+body::before {
+  content: ''; position: fixed; inset: 0;
+  background: radial-gradient(ellipse 90% 55% at 50% -10%, rgba(26,31,40,.05), transparent 60%);
+  pointer-events: none; z-index: 0;
+}
+.container { max-width: 1320px; margin: 0 auto; padding: 18px 24px 48px; position: relative; z-index: 1; }
+
+/* ───────── Header ───────── */
+.header { display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 0 14px; border-bottom: 1px solid var(--border); margin-bottom: 14px;
+  flex-wrap: wrap; gap: 10px; }
+.header-left { display: flex; align-items: center; gap: 12px; }
+.logo-wrap { position: relative; width: 38px; height: 38px; flex: 0 0 38px; }
+.logo-ring { position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid var(--accent); opacity: .35; }
+.logo-ring::before { content: ''; position: absolute; top: -2px; left: 50%; transform: translateX(-50%);
+  width: 4px; height: 4px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.logo-core { position: absolute; inset: 10px; border-radius: 50%; background: var(--accent); }
+.brand h1 { font-size: 18px; font-weight: 700; color: var(--text-hi); letter-spacing: .3px; }
+.brand p { font-size: 10.5px; color: var(--faint); margin-top: 2px; letter-spacing: 1.1px; }
+.header-right { display: flex; align-items: center; gap: 8px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--dim);
+  background: var(--card); border: 1px solid var(--border); padding: 5px 10px; border-radius: 999px; white-space: nowrap; }
+.pill .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--faint); }
+.pill.warn .dot { background: var(--accent); }
+a.back { font-size: 12px; color: var(--dim); text-decoration: none; border: 1px solid var(--border);
+  background: var(--card); padding: 6px 11px; border-radius: 8px; transition: .15s; white-space: nowrap; }
+a.back:hover { color: var(--accent); border-color: var(--accent-line); }
+
+/* ───────── 速查 ───────── */
+.picker { position: relative; margin-bottom: 14px; }
+.picker-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.picker input { flex: 1 1 260px; max-width: 560px; min-width: 0; border: 1px solid var(--border); background: var(--card);
+  border-radius: var(--radius-md); padding: 10px 13px; font-size: 13px; color: var(--text);
+  font-family: inherit; outline: none; transition: .15s; }
+.picker input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(149,80,31,.10); }
+.picker input::placeholder { color: var(--faint); }
+.picker .tip { font-size: 11.5px; color: var(--faint); white-space: nowrap; }
+.results { position: absolute; left: 0; right: 0; top: 48px; z-index: 40; background: var(--card);
+  border: 1px solid var(--border-hi); border-radius: var(--radius-md); box-shadow: var(--shadow-pop);
+  overflow: hidden; max-height: 320px; overflow-y: auto; }
+.results.hidden { display: none; }
+.results div { padding: 10px 14px; font-size: 12.5px; cursor: pointer; display: flex; gap: 10px; align-items: center; }
+.results div:hover { background: var(--bg-0); }
+.results .c { font-weight: 700; color: var(--text-hi); min-width: 54px; }
+.results .g { margin-left: auto; color: var(--faint); font-size: 11px; }
+.results .empty { color: var(--dim); cursor: default; }
+
+/* ───────── 两栏 ───────── */
+.layout { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 14px; align-items: start; }
+.col-left, .col-right { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.col-left { position: sticky; top: 14px; }
+
+.card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px 18px; }
+
+/* ───────── 主卡 ───────── */
+.hero { position: relative; overflow: hidden; padding: 18px; }
+.hero::after { content: ''; position: absolute; right: -70px; top: -70px; width: 190px; height: 190px;
+  border-radius: 50%; background: radial-gradient(circle, rgba(26,31,40,.05), transparent 70%); }
+.hero-name { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.hero-name h2 { font-size: 16px; font-weight: 700; color: var(--text-hi); }
+.hero-name .code { font-size: 11.5px; color: var(--dim); letter-spacing: .4px; }
+.hero-top { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; margin-top: 6px; }
+.hero-mcap { font-size: 38px; font-weight: 800; color: var(--text-hi); font-variant-numeric: tabular-nums;
+  letter-spacing: -1.2px; line-height: 1.02; }
+.hero-chg { font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.hero-share { display: flex; align-items: baseline; gap: 7px; margin-top: 10px; flex-wrap: wrap; min-width: 0; }
+.hero-share .big { font-size: 26px; font-weight: 800; color: var(--accent); font-variant-numeric: tabular-nums; letter-spacing: -.5px; }
+.hero-share .txt { font-size: 12.5px; color: var(--text); }
+.hero-sub { margin-top: 7px; font-size: 12px; color: var(--dim); line-height: 1.7; }
+.hero-sub b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* 52 周位置 */
+.pos { margin-top: 12px; padding-top: 11px; border-top: 1px dashed var(--border); }
+.pos-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.pos-head .t { font-size: 11.5px; color: var(--dim); }
+.pos-head .v { font-size: 11.5px; color: var(--text); font-variant-numeric: tabular-nums; }
+.pos-bar { position: relative; height: 6px; border-radius: 3px; margin-top: 9px;
+  background: linear-gradient(90deg, #e3e7ed, #b9c2ce); }
+.pos-bar i { position: absolute; top: -4px; width: 3px; height: 14px; border-radius: 2px;
+  background: var(--text-hi); box-shadow: 0 0 0 2px #fff, 0 0 6px rgba(16,27,46,.35); transform: translateX(-50%); }
+.pos-ends { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--faint);
+  margin-top: 5px; font-variant-numeric: tabular-nums; }
+
+/* ───────── 自选 ───────── */
+.self-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
+.self-head h2 { font-size: 14px; font-weight: 700; color: var(--text-hi); letter-spacing: -.01em; }
+.self-head span { font-size: 11px; color: var(--faint); }
+.self-list { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
+.self-list::-webkit-scrollbar { height: 4px; }
+.self-list::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 2px; }
+.chip-card { flex: 0 0 auto; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 9px 11px;
+  min-width: 122px; cursor: pointer; background: var(--card); transition: .15s; position: relative; }
+.chip-card:hover { border-color: var(--border-hi); background: var(--bg-0); }
+.chip-card.on { border-color: var(--accent); background: var(--accent-soft); }
+.chip-card .n { font-size: 12px; font-weight: 600; color: var(--text-hi); }
+.chip-card .m { font-size: 11px; color: var(--dim); margin-top: 2px; font-variant-numeric: tabular-nums; }
+.chip-card .p { font-size: 11px; font-variant-numeric: tabular-nums; margin-top: 1px; }
+.chip-card .x { position: absolute; right: 3px; top: 2px; font-size: 12px; color: var(--faint);
+  width: 18px; height: 18px; line-height: 17px; text-align: center; border-radius: 50%; }
+.chip-card .x:hover { background: var(--red); color: #fff; }
+.self-empty { font-size: 12px; color: var(--dim); line-height: 1.6; }
+
+/* ───────── 区块标题 ───────── */
+.sec-title { display: flex; align-items: baseline; justify-content: space-between; gap: 4px 10px;
+  flex-wrap: wrap; margin-bottom: 3px; }
+.sec-title h2 { font-size: 14px; font-weight: 700; color: var(--text-hi); letter-spacing: -.01em; }
+.sec-title .hint { font-size: 11px; color: var(--faint); }
+.sec-note { font-size: 11.5px; color: var(--dim); line-height: 1.65; margin-bottom: 11px; }
+.sec-note b { color: var(--text); font-weight: 600; }
+
+/* ───────── 四个分母 ───────── */
+.brow { display: grid; grid-template-columns: 84px minmax(0,1fr) 54px; align-items: center; gap: 9px; padding: 7px 0; }
+.brow + .brow { border-top: 1px dashed var(--border); }
+.brow .name { font-size: 12px; color: var(--text); line-height: 1.35; }
+.brow .name em { display: block; font-style: normal; font-size: 10px; color: var(--faint); margin-top: 1px; }
+.bbar { min-width: 0; height: 18px; background: var(--border-soft); border-radius: 4px; position: relative; overflow: hidden; }
+.bbar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px;
+  background: var(--accent); opacity: .85; transition: width .5s cubic-bezier(.2,.7,.3,1); }
+.bbar span { position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  font-size: 10px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.brow .pct { text-align: right; font-size: 13.5px; font-weight: 700; color: var(--accent);
+  font-variant-numeric: tabular-nums; }
+
+/* ───────── 结构条（嵌在主导模块里） ───────── */
+.stack-bar { display: flex; height: 30px; border-radius: 7px; overflow: hidden; border: 1px solid var(--border); }
+.stack-seg { position: relative; display: flex; align-items: center; justify-content: center; }
+.stack-seg + .stack-seg { box-shadow: inset 1px 0 0 rgba(255,255,255,.55); }
+.stack-seg span { font-size: 10px; color: #fff; font-weight: 600; white-space: nowrap; overflow: hidden; }
+.legend { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 6px 12px; margin-top: 10px; }
+.legend div { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--dim); min-width: 0; }
+.legend div > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+.legend b { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* ───────── 主导表 ───────── */
+.lead { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 3px; }
+.lead th { font-size: 10.5px; font-weight: 600; color: var(--faint); padding: 5px 7px;
+  text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.lead th:first-child { text-align: left; }
+.lead td { padding: 7px; text-align: right; border-bottom: 1px solid var(--border-soft);
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lead td:first-child { text-align: left; }
+.lead tr { cursor: pointer; transition: background .12s; }
+.lead tr:hover td { background: #fafbfc; }
+.lead tr:last-child td { border-bottom: 0; }
+.lead .gname { font-weight: 600; color: var(--text-hi); }
+.lead .gname em { font-style: normal; font-weight: 400; color: var(--faint); font-size: 10.5px; margin-left: 5px; }
+.lead .ld { font-weight: 600; color: var(--text-hi); }
+.lead .ld span { color: var(--faint); font-weight: 400; font-size: 10.5px; margin-left: 4px; }
+.lead .bar { position: relative; height: 6px; border-radius: 3px; background: var(--border-soft); min-width: 60px; }
+.lead .bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: #d3b18c; }
+  background: var(--accent); opacity: .8; }
+
+/* ───────── 明细表 ───────── */
+.table-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  flex-wrap: wrap; margin-bottom: 9px; }
+.table-head h2 { font-size: 14px; font-weight: 700; color: var(--text-hi); letter-spacing: -.01em; }
+.table-head span { font-size: 11px; color: var(--faint); }
+.th-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sw { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--dim);
+  cursor: pointer; user-select: none; }
+.sw input { width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer; }
+.sw:hover { color: var(--text); }
+.table-box { overflow: auto; max-height: 600px; border-top: 1px solid var(--border); margin: 0 -18px -16px; }
+.table-box::-webkit-scrollbar { width: 8px; height: 8px; }
+.table-box::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 4px; }
+.table-box::-webkit-scrollbar-thumb:hover { background: var(--border-hi); }
+.table-box::-webkit-scrollbar-track { background: transparent; }
+table.det { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.det thead th { position: sticky; top: 0; z-index: 3; background: #f9fafb; font-size: 11px;
+  font-weight: 600; color: var(--dim); padding: 9px 9px; text-align: right; white-space: nowrap;
+  border-bottom: 1px solid var(--border); cursor: pointer; user-select: none; }
+table.det thead th:hover { color: var(--accent); }
+table.det thead th.l { text-align: left; }
+table.det thead th.sorted { color: var(--accent); }
+table.det thead th .ar { font-size: 9px; opacity: .8; margin-left: 2px; }
+table.det thead th.star-th { width: 32px; text-align: center; cursor: default; }
+table.det thead th.rank-th { width: 32px; text-align: center; }
+table.det tbody td { padding: 8px 9px; text-align: right; border-bottom: 1px solid var(--border-soft);
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.det tbody td.l { text-align: left; }
+table.det tbody tr { cursor: pointer; }
+table.det tbody tr:hover { background: #fafbfc; }
+table.det tbody tr.on { background: var(--accent-soft); }
+table.det tbody tr.on:hover { background: #f6ece1; }
+table.det tbody tr.group-row { cursor: default; }
+table.det tbody tr.group-row td { background: #f9fafb; color: var(--dim); font-size: 11px;
+  font-weight: 600; padding: 6px 9px; border-bottom: 1px solid var(--border); }
+table.det tbody tr.group-row td.g-mark { border-left: 2px solid var(--border-hi); padding-left: 7px; }
+table.det tbody tr.group-row .g-name { color: var(--text); font-weight: 600; }
+table.det tbody tr.group-row .g-tot { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+table.det tbody tr.group-row .g-n { color: var(--faint); font-weight: 400; margin-left: 5px; }
+.co { display: flex; align-items: center; gap: 7px; }
+.co .tick { font-size: 10.5px; color: var(--faint); font-weight: 600; letter-spacing: .3px; }
+.co .nm { color: var(--text-hi); font-weight: 600; }
+.up { color: var(--red); }
+.down { color: var(--green); }
+.flat { color: var(--dim); }
+.tag { display: inline-block; font-size: 11px; padding: 0; color: var(--dim); }
+.tag.ranktag { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); font-weight: 600; }
+.star { display: inline-block; width: 24px; height: 24px; line-height: 23px; text-align: center;
+  font-size: 14px; color: #ccd2dc; border-radius: 5px; transition: .12s; }
+.star:hover { background: var(--accent-soft); color: var(--accent); }
+.star.on { color: var(--accent); }
+td.star-td { text-align: center; padding: 4px 4px; }
+td.rank-td { text-align: center; color: var(--faint); font-size: 11px; padding: 8px 3px; }
+
+/* ───────── foot ───────── */
+.foot { margin-top: 16px; font-size: 11px; color: var(--faint); line-height: 1.8; }
+.foot b { color: var(--dim); }
+.foot .warnline { display: block; margin-top: 7px; padding: 9px 12px; border-radius: 8px;
+  background: #fff8ee; border: 1px solid var(--accent-line); color: #8a5a12; line-height: 1.7; }
+.loading { padding: 50px 20px; text-align: center; color: var(--dim); font-size: 13px; }
+
+/* ───────── 响应式 ───────── */
+@media (max-width: 1023px) {
+  .layout { grid-template-columns: 1fr; }
+  .col-left { position: static; }
+  .col-right { order: 2; }
+  .table-box { max-height: 500px; }
+}
+@media (max-width: 720px) {
+  .container { padding: 12px 14px 40px; }
+  .hero-mcap { font-size: 32px; }
+  .brow { grid-template-columns: 78px minmax(0,1fr) 50px; gap: 8px; }
+  .header-right .pill { display: none; }
+  .legend { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .lead th:nth-child(2), .lead td:nth-child(2) { display: none; }
+  .table-box { max-height: 440px; }
+  .star { width: 30px; height: 30px; line-height: 29px; }
+  /* 窄屏只留：星 / # / 公司 / 市值 / 占比 / 距高 / 涨跌 */
+  table.det thead th:nth-child(4), table.det tbody td.g-col,
+  table.det thead th:nth-child(7), table.det tbody td.dd-col,
+  table.det thead th:nth-child(9), table.det tbody td.pe-col { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <div class="header-left">
+      <div class="logo-wrap"><div class="logo-ring"></div><div class="logo-core"></div></div>
+      <div class="brand">
+        <h1>美股 · AI 版图</h1>
+        <p>XIAOSAN LAB / US AI LANDSCAPE</p>
+      </div>
+    </div>
+    <div class="header-right">
+      <span class="pill" id="dataPill"><span class="dot"></span><span id="dataTime">加载中</span></span>
+      <a class="back" href="retail-radar.html">← A 股看板</a>
+    </div>
+  </div>
+
+  <div class="picker">
+    <div class="picker-row">
+      <input id="q" type="text" autocomplete="off" placeholder="查任意美股：输入代码或中文名，如 NVDA / 英伟达 / 闪迪">
+      <span class="tip">也可点下表任意一行切换</span>
+    </div>
+    <div class="results hidden" id="results"></div>
+  </div>
+
+  <div class="layout">
+
+    <!-- 左栏：这一家 -->
+    <div class="col-left">
+
+      <div class="card hero" id="hero">
+        <div class="hero-name">
+          <h2 id="hName">--</h2>
+          <span class="code" id="hCode"></span>
+          <span class="tag" id="hGroup"></span>
+          <span class="tag ranktag" id="hRank"></span>
+        </div>
+        <div class="hero-top">
+          <div class="hero-mcap" id="hMcap">--</div>
+          <div class="hero-chg" id="hChg"></div>
+        </div>
+        <div class="hero-share">
+          <span class="big" id="hShare">--</span>
+          <span class="txt" id="hShareTxt">占「AI 全产业链」总市值</span>
+        </div>
+        <div class="hero-sub" id="hSub">--</div>
+        <div class="pos" id="posBox">
+          <div class="pos-head">
+            <span class="t">52 周区间位置</span>
+            <span class="v" id="posVal">--</span>
+          </div>
+          <div class="pos-bar"><i id="posPin" style="left:50%"></i></div>
+          <div class="pos-ends"><span id="posLo">--</span><span id="posHi">--</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="self-head">
+          <h2>我的自选</h2>
+          <span id="selfCount">0 只</span>
+        </div>
+        <div class="self-list" id="selfList"></div>
+      </div>
+
+      <div class="card">
+        <div class="sec-title">
+          <h2 id="basisTitle">几个分母</h2>
+          <span class="hint" id="basisHint">分母不同，答案不同</span>
+        </div>
+        <p class="sec-note">占比取决于你把谁算成 AI。分母越大，这家看起来越小 —— 但「占比小」不等于「不主导」。</p>
+        <div id="basisRows"></div>
+      </div>
+
+    </div>
+
+    <!-- 右栏：整个池子 -->
+    <div class="col-right">
+
+      <div class="card">
+        <div class="sec-title">
+          <h2>谁在主导这条链</h2>
+          <span class="hint">CR1 = 该环节最大一家占比</span>
+        </div>
+        <div class="stack-bar" id="stackBar"></div>
+        <div class="legend" id="legend"></div>
+        <table class="lead">
+          <thead>
+            <tr><th>环节</th><th>环节市值</th><th style="width:14%"></th><th>龙头</th><th>CR1</th><th>CR3</th></tr>
+          </thead>
+          <tbody id="leadBody"></tbody>
+        </table>
+        <p class="sec-note" id="stackNote" style="margin:10px 0 0"></p>
+      </div>
+
+      <div class="card" style="padding-bottom:16px">
+        <div class="table-head">
+          <h2>成分明细</h2>
+          <div class="th-right">
+            <label class="sw"><input type="checkbox" id="grpToggle" checked><span>按环节分组</span></label>
+            <span>共 <b id="rowCount">--</b> 家 · 表格内可滚动</span>
+          </div>
+        </div>
+        <div class="table-box">
+          <table class="det">
+            <thead>
+              <tr>
+                <th class="star-th">☆</th>
+                <th class="rank-th" data-k="rank" title="按全池市值排名排序">#</th>
+                <th class="l" data-k="name" style="width:24%">公司 / 代码</th>
+                <th class="l" data-k="group">环节</th>
+                <th data-k="mcap">市值</th>
+                <th data-k="share">占比</th>
+                <th data-k="dd">距52周高</th>
+                <th data-k="chg">涨跌幅</th>
+                <th data-k="pe">PE</th>
+              </tr>
+            </thead>
+            <tbody id="tbody">
+              <tr><td colspan="9" class="loading">加载中…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="foot" id="foot"></div>
+</div>
+
+<script>
+
+// 环节不再用 8 个色相（那是「花花绿绿」的根源），改成同一灰阶按市值分档。
+// 颜色只编码「排名先后」，环节身份由文字和位置承担。
+const SCALE = ['#4f5b6b','#5f6b7b','#6f7b8b','#7f8b9b','#8f9bab','#a5b0be','#bbc5d1','#d1d9e3'];
+const scaleAt = i => SCALE[Math.min(i, SCALE.length - 1)];
+const inkOn = i => (i < 4 ? '#ffffff' : '#39404d');   // 前 4 档够深配白字，后 4 档配深字
+const MAG7 = ['AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
+const WL_KEY = 'xiaosan_us_watch_v1';
+const SEL_KEY = 'xiaosan_us_sel_v1';
+const ALIAS = {
+  '英伟达':'NVDA','超威':'AMD','超微半导体':'AMD','博通':'AVGO','迈威尔':'MRVL','美光':'MU',
+  '闪迪':'SNDK','西部数据':'WDC','希捷':'STX','高通':'QCOM','英特尔':'INTC','德州仪器':'TXN',
+  '亚德诺':'ADI','安谋':'ARM','台积电':'TSM','联电':'UMC','格芯':'GFS','日月光':'ASX',
+  '阿斯麦':'ASML','应用材料':'AMAT','泛林':'LRCX','科磊':'KLAC','新思':'SNPS','楷登':'CDNS',
+  '微软':'MSFT','谷歌':'GOOGL','亚马逊':'AMZN','甲骨文':'ORCL','脸书':'META',
+  '帕兰提尔':'PLTR','赛富时':'CRM','雪花':'SNOW','现在服务':'NOW','奥多比':'ADBE',
+  '特斯拉':'TSLA','苹果':'AAPL','超微电脑':'SMCI','戴尔':'DELL','慧与':'HPE',
+  '伊顿':'ETN','维谛':'VRT','星座能源':'CEG','新纪元':'NEE','易昆尼克斯':'EQIX',
+  '阿里':'BABA','京东':'JD','拼多多':'PDD','百度':'BIDU','网易':'NTES',
+  '奈飞':'NFLX','摩根大通':'JPM','高盛':'GS','礼来':'LLY','联合健康':'UNH',
+  '沃尔玛':'WMT','波音':'BA','迪士尼':'DIS','优步':'UBER','星巴克':'SBUX','耐克':'NKE'
+};
+
+let DATA = null, SEL = null, WL = [], ROWS = [], TOTAL = 0, RANK = {};
+let GROUP_ON = true;   // 表格是否按环节分组
+let sortKey = 'mcap', sortDir = -1;
+let HARD_KEYS = [];
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function fmtMcap(v) {
+  if (v == null || !isFinite(v)) return '--';
+  if (v >= 1e12) return '$' + (v / 1e12).toFixed(2) + ' 万亿';
+  if (v >= 1e8)  return '$' + Math.round(v / 1e8).toLocaleString() + ' 亿';
+  return '$' + Math.round(v / 1e4).toLocaleString() + ' 万';
+}
+function fmtShort(v) { return v >= 1e12 ? (v / 1e12).toFixed(1) + 'T' : (v >= 1e9 ? (v / 1e9).toFixed(0) + 'B' : '--'); }
+function chgCls(v) { return v > 0 ? 'up' : (v < 0 ? 'down' : 'flat'); }
+function chgTxt(v) { return v == null ? '--' : (v > 0 ? '+' : '') + v.toFixed(2) + '%'; }
+function ddTxt(v) { return v == null ? '--' : v.toFixed(1) + '%'; }
+function peTxt(v) { return (v == null || v <= 0) ? '--' : v.toFixed(1); }
+function groupOf(code) {
+  const g = DATA.groups.find(g => g.codes.includes(code));
+  return g || { key:'other', name:'池外', hard:false };
+}
+function groupRows(key) { return ROWS.filter(x => groupOf(x.code).key === key); }
+function groupTotal(key) { return groupRows(key).reduce((s, x) => s + x.mcap, 0); }
+
+/* ── 自选 ── */
+function loadWL() {
+  try { WL = JSON.parse(localStorage.getItem(WL_KEY) || '[]'); } catch (e) { WL = []; }
+  if (!Array.isArray(WL)) WL = [];
+  WL = WL.filter(c => typeof c === 'string').slice(0, 100);
+}
+function saveWL() { try { localStorage.setItem(WL_KEY, JSON.stringify(WL)); } catch (e) {} }
+function toggleWL(code, ev) {
+  if (ev) ev.stopPropagation();
+  const i = WL.indexOf(code);
+  if (i >= 0) WL.splice(i, 1); else WL.push(code);
+  saveWL();
+  renderSelf();
+  document.querySelectorAll('.star[data-code="' + code + '"]').forEach(el => {
+    const on = WL.includes(code);
+    el.classList.toggle('on', on);
+    el.textContent = on ? '★' : '☆';
+  });
+}
+
+/* ── 主卡 ── */
+function select(code) {
+  if (!ROWS.find(x => x.code === code)) return;
+  SEL = code;
+  try { history.replaceState(null, '', '#' + code); localStorage.setItem(SEL_KEY, code); } catch (e) {}
+  renderHero(); renderBasis(); renderStack(); renderLead(); markSelected(); renderSelf();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+function markSelected() {
+  document.querySelectorAll('#tbody tr[data-code]').forEach(tr => tr.classList.toggle('on', tr.dataset.code === SEL));
+}
+
+function renderHero() {
+  const x = ROWS.find(i => i.code === SEL);
+  if (!x) return;
+  const g = groupOf(x.code);
+  const gr = groupRows(g.key).slice().sort((a, b) => b.mcap - a.mcap);
+  const rank = gr.findIndex(i => i.code === x.code) + 1;
+  const gtot = gr.reduce((s, i) => s + i.mcap, 0);
+
+  $('hName').textContent = x.name;
+  $('hCode').textContent = x.code;
+  $('hGroup').textContent = g.name;
+  $('hRank').textContent = '全池 #' + (RANK[x.code] || '--');
+  $('hMcap').textContent = fmtMcap(x.mcap);
+  const ce = $('hChg');
+  ce.className = 'hero-chg ' + chgCls(x.chg);
+  ce.textContent = chgTxt(x.chg);
+
+  $('hShare').textContent = (x.mcap / TOTAL * 100).toFixed(2) + '%';
+  $('hShareTxt').textContent = '占「AI 全产业链」' + ROWS.length + ' 家总市值';
+  $('hSub').innerHTML =
+    '在<b>' + g.name + '</b>里排第 <b>' + rank + '</b> / ' + gr.length + ' 家，' +
+    '占该环节 <b>' + (x.mcap / gtot * 100).toFixed(1) + '%</b>' +
+    '　·　市盈率 <b>' + peTxt(x.pe) + '</b>';
+
+  // 52 周位置
+  if (x.hi52 && x.lo52 && x.hi52 > x.lo52) {
+    const p = Math.max(0, Math.min(100, (x.price - x.lo52) / (x.hi52 - x.lo52) * 100));
+    $('posPin').style.left = p.toFixed(1) + '%';
+    $('posVal').innerHTML = '距高点 <b class="' + chgCls(x.dd) + '">' + ddTxt(x.dd) + '</b>' +
+      '　·　在区间 <b>' + p.toFixed(0) + '%</b> 分位';
+    $('posLo').textContent = '低 $' + x.lo52.toFixed(2);
+    $('posHi').textContent = '高 $' + x.hi52.toFixed(2);
+    $('posBox').style.display = '';
+  } else {
+    $('posBox').style.display = 'none';
+  }
+}
+
+/* ── 环节集中度 ── */
+function renderLead() {
+  const rows = DATA.groups.map(g => {
+    const items = groupRows(g.key).slice().sort((a, b) => b.mcap - a.mcap);
+    if (!items.length) return null;
+    const tot = items.reduce((s, i) => s + i.mcap, 0);
+    const cr1 = items[0].mcap / tot * 100;
+    const cr3 = items.slice(0, 3).reduce((s, i) => s + i.mcap, 0) / tot * 100;
+    return { g, items, tot, cr1, cr3, top: items[0] };
+  }).filter(Boolean).sort((a, b) => b.tot - a.tot);
+
+  $('leadBody').innerHTML = rows.map(r =>
+    '<tr data-code="' + r.top.code + '">' +
+      '<td><span class="gname">' + r.g.name + '<em>' + r.items.length + ' 家</em></span></td>' +
+      '<td>' + fmtMcap(r.tot) + '</td>' +
+      '<td><div class="bar"><i style="width:' + r.cr1.toFixed(0) + '%"></i></div></td>' +
+      '<td><span class="ld">' + r.top.name + '<span>' + r.top.code + '</span></span></td>' +
+      '<td><b>' + r.cr1.toFixed(1) + '%</b></td>' +
+      '<td>' + r.cr3.toFixed(1) + '%</td>' +
+    '</tr>'
+  ).join('');
+
+  $('leadBody').onclick = e => {
+    const tr = e.target.closest('tr[data-code]');
+    if (tr) select(tr.dataset.code);
+  };
+}
+
+/* ── 四档分母 ── */
+function renderBasis() {
+  const x = ROWS.find(i => i.code === SEL);
+  if (!x) return;
+  const gk = groupOf(x.code).key;
+  const totChip = groupTotal('chip');
+  const totHard = HARD_KEYS.reduce((s, k) => s + groupTotal(k), 0);
+  const totMag7 = ROWS.filter(i => MAG7.includes(i.code)).reduce((s, i) => s + i.mcap, 0);
+  const totOwn = groupTotal(gk);
+
+  const rows = [
+    { name: '同环节', sub: '只和 ' + groupRows(gk).length + ' 家同行比', denom: totOwn, ok: totOwn > 0 },
+    { name: 'AI 硬件层', sub: '芯片 + 设备 + 网络 + 服务器 + 电力', denom: totHard, ok: HARD_KEYS.includes(gk) },
+    { name: '科技七巨头', sub: 'Mag7 合计 ' + ROWS.filter(i => MAG7.includes(i.code)).length + ' 家', denom: totMag7, ok: MAG7.includes(x.code) },
+    { name: 'AI 全产业链', sub: '池内全部 ' + ROWS.length + ' 家', denom: TOTAL, ok: true },
+  ];
+  // chip 组的「同环节」就是「算力芯片」，不再重复列一行
+
+  $('basisRows').innerHTML = rows.map(r => {
+    const p = x.mcap / r.denom * 100;
+    const grey = !r.ok;
+    return '<div class="brow"' + (grey ? ' style="opacity:.42"' : '') + '>' +
+      '<div class="name">' + r.name + '<em>' + r.sub + '</em></div>' +
+      '<div class="bbar"><i style="width:' + (grey ? 0 : Math.min(p, 100)).toFixed(1) + '%"></i>' +
+        '<span>分母 ' + fmtShort(r.denom) + '</span></div>' +
+      '<div class="pct">' + (grey ? '—' : p.toFixed(2) + '%') + '</div>' +
+    '</div>';
+  }).join('');
+
+  $('basisTitle').textContent = x.name + '，几个分母';
+  const vals = rows.filter(r => r.ok).map(r => x.mcap / r.denom * 100);
+  $('basisHint').textContent = vals.length > 1
+    ? '从 ' + Math.min(...vals).toFixed(0) + '% 到 ' + Math.max(...vals).toFixed(0) + '%'
+    : '分母不同，答案不同';
+}
+
+/* ── 结构图 ── */
+function renderStack() {
+  const groups = DATA.groups.map(g => {
+    const items = groupRows(g.key);
+    return { ...g, mcap: items.reduce((s, x) => s + x.mcap, 0), n: items.length };
+  }).filter(g => g.mcap > 0).sort((a, b) => b.mcap - a.mcap);
+
+  $('stackBar').innerHTML = groups.map((g, gi) => {
+    const w = g.mcap / TOTAL * 100;
+    const bg = scaleAt(gi), ink = inkOn(gi);
+    const selIn = g.codes.includes(SEL);
+    const selMcap = selIn ? (ROWS.find(i => i.code === SEL) || {}).mcap || 0 : 0;
+    if (selMcap) {
+      const sw = selMcap / g.mcap * 100;
+      return '<div class="stack-seg" style="flex-basis:' + w + '%;background:' + bg + ';display:flex;">' +
+        '<div style="flex:0 0 ' + sw + '%;background:var(--accent);display:flex;align-items:center;justify-content:center;">' +
+          (w * sw / 100 > 4 ? '<span style="color:#fff">' + SEL + '</span>' : '') + '</div>' +
+        '<div style="flex:1;display:flex;align-items:center;justify-content:center;">' +
+          (w > 15 ? '<span style="color:' + ink + '">' + g.name + '</span>' : '') + '</div></div>';
+    }
+    return '<div class="stack-seg" style="flex-basis:' + w + '%;background:' + bg + '">' +
+      (w > 15 ? '<span style="color:' + ink + '">' + g.name + '</span>' : '') + '</div>';
+  }).join('');
+
+  $('legend').innerHTML = groups.map((g, gi) =>
+    '<div><i style="background:' + scaleAt(gi) + '"></i><span>' + g.name + '</span><b>' + (g.mcap / TOTAL * 100).toFixed(1) + '%</b></div>'
+  ).join('');
+
+  const hard = HARD_KEYS.reduce((s, k) => s + (groups.find(g => g.key === k) || {}).mcap, 0);
+  const cloud = (groups.find(g => g.key === 'cloud') || {}).mcap || 0;
+  const soft = (groups.find(g => g.key === 'soft') || {}).mcap || 0;
+  $('stackNote').innerHTML =
+    '算力硬件（芯片 + 设备 + 网络 + 服务器 + 电力）合计 <b style="color:var(--text)">' + (hard / TOTAL * 100).toFixed(1) + '%</b>，' +
+    '云厂商 <b style="color:var(--text)">' + (cloud / TOTAL * 100).toFixed(1) + '%</b>，' +
+    '纯 AI 软件只有 <b style="color:var(--text)">' + (soft / TOTAL * 100).toFixed(1) + '%</b>。' +
+    '钱堆在基础设施，应用层还没长出来。';
+}
+
+/* ── 表 ── */
+function renderTable() {
+  const rows = ROWS.slice();
+  rows.sort((a, b) => {
+    let va, vb;
+    if (sortKey === 'group') { va = groupOf(a.code).name; vb = groupOf(b.code).name; }
+    else if (sortKey === 'name') { va = a.name; vb = b.name; }
+    else if (sortKey === 'share') { va = a.mcap / TOTAL; vb = b.mcap / TOTAL; }
+    else if (sortKey === 'rank') { va = a.mcap; vb = b.mcap; }   // 排名即市值序
+    else { va = a[sortKey]; vb = b[sortKey]; }
+    if (typeof va === 'string') return va.localeCompare(vb) * sortDir;
+    va = (va == null || !isFinite(va)) ? -Infinity : va;
+    vb = (vb == null || !isFinite(vb)) ? -Infinity : vb;
+    return (va - vb) * sortDir;
+  });
+
+  let html = '';
+  if (GROUP_ON) {
+    // 关键：组的先后也按「当前这一列」来定 —— 取组内排在最前的那个人。
+    // 这样组内和组间用的是同一种序，不会出现「组内按名次、组间按总额」的倒挂。
+    const firstIdx = new Map();
+    rows.forEach((x, i) => {
+      const k = groupOf(x.code).key;
+      if (!firstIdx.has(k)) firstIdx.set(k, i);
+    });
+    DATA.groups
+      .filter(g => groupRows(g.key).length)
+      .sort((a, b) => (firstIdx.get(a.key) ?? 1e9) - (firstIdx.get(b.key) ?? 1e9))
+      .forEach(g => {
+        const members = groupRows(g.key);
+        const tot = members.reduce((s, x) => s + x.mcap, 0);
+        html += groupRowHtml(g, members.length, tot, RANK[rows.find(x => g.codes.includes(x.code)).code]);
+        rows.filter(x => g.codes.includes(x.code)).forEach(x => { html += rowHtml(x); });
+      });
+  } else {
+    html = rows.map(rowHtml).join('');
+  }
+  $('tbody').innerHTML = html;
+
+  document.querySelectorAll('thead th[data-k]').forEach(th => {
+    const on = th.dataset.k === sortKey;
+    th.classList.toggle('sorted', on);
+    th.querySelector('.ar')?.remove();
+    if (on) th.insertAdjacentHTML('beforeend', '<span class="ar">' + (sortDir < 0 ? '▼' : '▲') + '</span>');
+  });
+
+  $('tbody').onclick = e => {
+    const star = e.target.closest('.star');
+    if (star) { toggleWL(star.dataset.code, e); return; }
+    const tr = e.target.closest('tr[data-code]');
+    if (tr) select(tr.dataset.code);
+  };
+}
+
+function groupRowHtml(g, n, tot, firstRank) {
+  return '<tr class="group-row">' +
+    '<td class="star-td g-mark"></td>' +
+    '<td class="rank-td"></td>' +
+    '<td class="l" colspan="2"><span class="g-name">' + g.name + '</span>' +
+      '<span class="g-n">' + n + ' 家 · 首位 #' + (firstRank || '-') + '</span></td>' +
+    '<td class="g-tot">' + fmtMcap(tot) + '</td>' +
+    '<td class="g-n">' + (tot / TOTAL * 100).toFixed(1) + '%</td>' +
+    '<td colspan="3"></td>' +
+  '</tr>';
+}
+
+function rowHtml(x) {
+  const g = groupOf(x.code);
+  const starred = WL.includes(x.code);
+  return '<tr' + (x.code === SEL ? ' class="on"' : '') + ' data-code="' + x.code + '">' +
+    '<td class="star-td" data-code="' + x.code + '"><span class="star' + (starred ? ' on' : '') +
+      '" data-code="' + x.code + '">' + (starred ? '★' : '☆') + '</span></td>' +
+    '<td class="rank-td">' + (RANK[x.code] || '') + '</td>' +
+    '<td class="l"><div class="co"><span class="nm">' + esc(x.name) + '</span>' +
+      '<span class="tick">' + esc(x.code) + '</span></div></td>' +
+    '<td class="l g-col"><span class="tag">' + esc(g.name) + '</span></td>' +
+    '<td>' + fmtMcap(x.mcap) + '</td>' +
+    '<td>' + (x.mcap / TOTAL * 100).toFixed(2) + '%</td>' +
+    '<td class="dd-col ' + chgCls(x.dd) + '">' + ddTxt(x.dd) + '</td>' +
+    '<td class="' + chgCls(x.chg) + '">' + chgTxt(x.chg) + '</td>' +
+    '<td class="pe-col">' + peTxt(x.pe) + '</td>' +
+  '</tr>';
+}
+
+/* ── 自选区 ── */
+function renderSelf() {
+  const items = WL.map(c => ROWS.find(x => x.code === c)).filter(Boolean);
+  $('selfCount').textContent = items.length
+    ? items.length + ' 只 · 点卡片切换，点 × 移除'
+    : '0 只 · 点表格 ☆ 添加';
+  if (!items.length) {
+    $('selfList').innerHTML = '<div class="self-empty">还没有自选 —— 在右侧表格点 ☆ 添加</div>';
+    return;
+  }
+  $('selfList').innerHTML = items.map(x =>
+    '<div class="chip-card' + (x.code === SEL ? ' on' : '') + '" data-code="' + x.code + '">' +
+      '<span class="x" data-x="' + x.code + '">×</span>' +
+      '<div class="n">' + esc(x.name) + '</div>' +
+      '<div class="m">' + fmtMcap(x.mcap) + '</div>' +
+      '<div class="p ' + chgCls(x.chg) + '">' + chgTxt(x.chg) +
+        '　<span style="color:var(--dim)">' + (x.mcap / TOTAL * 100).toFixed(2) + '%</span></div>' +
+    '</div>'
+  ).join('');
+  $('selfList').onclick = e => {
+    const x = e.target.closest('[data-x]');
+    if (x) { toggleWL(x.dataset.x, e); return; }
+    const c = e.target.closest('[data-code]');
+    if (c) select(c.dataset.code);
+  };
+}
+
+/* ── 速查 ── */
+function lookup(q) {
+  const raw = String(q || '').trim();
+  if (!raw) return;
+  const up = raw.toUpperCase();
+  const inPool = ROWS.find(x => x.code === up) || ROWS.find(x => x.name === raw) ||
+                 ROWS.find(x => x.name.indexOf(raw) === 0);
+  if (inPool) { hideResults(); $('q').value = ''; select(inPool.code); return; }
+
+  const alias = ALIAS[raw] || ALIAS[raw.replace(/\s/g, '')];
+  const code = alias || (/^[A-Z][A-Z.\-]{0,6}$/.test(up) ? up : null);
+  if (!code) { showResults([{ empty: '池内没有「' + raw + '」，试试直接输代码（如 NVDA）' }]); return; }
+  showResults([{ empty: '查询 ' + code + ' …' }]);
+  fetchQuote(code);
+}
+
+function fetchQuote(code) {
+  const urls = ['105.' + code, '106.' + code].map(s =>
+    'https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&secids=' + encodeURIComponent(s) + '&fields=f12,f14,f2,f3,f20,f9'
+  );
+  Promise.all(urls.map(u => fetch(u).then(r => r.json()).catch(() => null)))
+    .then(list => {
+      let hit = null;
+      list.forEach(d => { const r = ((d || {}).data || {}).diff?.[0]; if (r && r.f20 > 0) hit = r; });
+      if (!hit) { showResults([{ empty: code + ' 查不到行情（代码是否正确？）' }]); return; }
+      if (ROWS.some(x => x.code === hit.f12)) { hideResults(); $('q').value = ''; select(hit.f12); return; }
+      showOutsider(hit);
+    })
+    .catch(() => showResults([{ empty: '查询失败：你的网络可能访问不了行情源' }]));
+}
+
+function showOutsider(r) {
+  hideResults(); $('q').value = '';
+  SEL = null;
+  $('hName').textContent = r.f14 || r.f12;
+  $('hCode').textContent = r.f12;
+  $('hGroup').textContent = '池外';
+  $('hRank').textContent = '';
+  $('hMcap').textContent = fmtMcap(r.f20);
+  const ce = $('hChg');
+  ce.className = 'hero-chg ' + chgCls(r.f3);
+  ce.textContent = chgTxt(r.f3);
+  $('hShare').textContent = '—';
+  $('hShareTxt').textContent = '不在 AI 池内，不参与占比';
+  $('hSub').innerHTML = '池外标的：市值可查，但「占 AI 市场多少」对它没有意义 —— 除非把它归进某个环节并计入分母。' +
+    '市盈率 ' + peTxt(r.f9) + '。';
+  $('posBox').style.display = 'none';
+  $('basisRows').innerHTML = '<div style="font-size:12.5px;color:var(--dim);padding:8px 0;line-height:1.8">' +
+    '池外公司不显示分档占比。<br>想看它占多少，需要先把它归到某个环节并计入分母。</div>';
+  $('basisTitle').textContent = '池外标的';
+  $('basisHint').textContent = '不计入分母';
+  renderStack(); markSelected();
+}
+
+function showResults(rows) {
+  const box = $('results');
+  box.classList.remove('hidden');
+  box.innerHTML = rows.map(r => r.empty
+    ? '<div class="empty">' + esc(r.empty) + '</div>'
+    : '<div data-code="' + r.code + '"><span class="c">' + esc(r.code) + '</span>' +
+      '<span>' + esc(r.name) + '</span><span class="g">' + esc(r.group) + '</span></div>'
+  ).join('');
+  box.onclick = e => {
+    const d = e.target.closest('[data-code]');
+    if (d) { hideResults(); $('q').value = ''; select(d.dataset.code); }
+  };
+}
+function hideResults() { $('results').classList.add('hidden'); }
+
+/* ── 启动 ── */
+fetch('data/us_ai.json', { cache: 'no-cache' })
+  .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+  .then(init)
+  .catch(err => {
+    $('tbody').innerHTML = '<tr><td colspan="9" class="loading">数据加载失败（' + esc(err.message) + '）</td></tr>';
+  });
+
+function init(d) {
+  DATA = d;
+  ROWS = d.items.filter(x => x && x.mcap > 0);
+  TOTAL = ROWS.reduce((s, x) => s + x.mcap, 0);
+  HARD_KEYS = d.groups.filter(g => g.hard).map(g => g.key);
+  RANK = {};
+  ROWS.slice().sort((a, b) => b.mcap - a.mcap).forEach((x, i) => { RANK[x.code] = i + 1; });
+  loadWL();
+
+  const t = new Date(d.fetched_at);
+  const hhmm = isNaN(t) ? '--' : String(t.getHours()).padStart(2,'0') + ':' + String(t.getMinutes()).padStart(2,'0');
+  const md = (d.us_date || '').slice(5).replace('-', '/');
+  $('dataTime').textContent = (d.live ? '盘中 ' : '收盘 ') + (md || '--');
+  $('dataPill').title = '抓取于 ' + hhmm;
+  if (d.stale && d.stale.length) $('dataPill').classList.add('warn');
+  $('rowCount').textContent = ROWS.length;
+
+  const hash = (location.hash || '').replace('#', '').toUpperCase();
+  const last = (localStorage.getItem(SEL_KEY) || '').toUpperCase();
+  const init0 = ROWS.find(x => x.code === hash) || ROWS.find(x => x.code === last) ||
+                ROWS.find(x => x.code === WL[0]) || ROWS.slice().sort((a, b) => b.mcap - a.mcap)[0];
+  SEL = init0 ? init0.code : null;
+
+  renderSelf(); renderHero(); renderBasis(); renderStack(); renderLead(); renderTable();
+
+  $('foot').innerHTML =
+    '<b>口径说明</b><br>' +
+    '· 「AI 全产业链」= 本站自建的 ' + ROWS.length + ' 家美股，覆盖芯片设计 → 晶圆制造/设备 → 网络光模块 → 服务器存储 → 数据中心电力 → 云平台 → AI 软件 → 终端应用；<b>不是</b>指数成分。<br>' +
+    '· 一只股票只归一个环节，避免同一份市值被算两遍。<br>' +
+    '· 市值、PE、52 周高低取自腾讯行情（gu.qq.com），美元计价；PE 为负表示亏损。<br>' +
+    '· 「距 52 周高」= 现价相对过去一年最高价的回撤，只说明<b>价格位置</b>，不说明贵贱 —— 便宜可以更便宜。<br>' +
+    '· 自选存在本机浏览器（换域名/清缓存会丢），暂不跨设备同步。<br>' +
+    '<span class="warnline">本页只提供公开数据与结构，不构成投资建议，也不做买卖判断。仓位、成本、能承受多大回撤，只有你自己知道。</span>';
+
+  $('q').addEventListener('input', e => {
+    const v = e.target.value.trim();
+    if (!v) { hideResults(); return; }
+    const hits = ROWS.filter(x => x.code.toUpperCase().indexOf(v.toUpperCase()) === 0 || x.name.indexOf(v) >= 0).slice(0, 6);
+    if (hits.length) showResults(hits.map(x => ({ code: x.code, name: x.name, group: groupOf(x.code).name })));
+    else hideResults();
+  });
+  $('q').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); lookup(e.target.value); }
+    if (e.key === 'Escape') { hideResults(); e.target.blur(); }
+  });
+  document.addEventListener('click', e => { if (!e.target.closest('.picker')) hideResults(); });
+
+  $('grpToggle').addEventListener('change', e => {
+    GROUP_ON = e.target.checked;
+    renderTable();
+  });
+
+  document.querySelectorAll('thead th[data-k]').forEach(th => {
+    th.addEventListener('click', () => {
+      const k = th.dataset.k;
+      if (sortKey === k) sortDir = -sortDir;
+      else { sortKey = k; sortDir = (k === 'group') ? 1 : -1; }
+      renderTable();
+    });
+  });
+}
+
+</script>
+</body>
+</html>
