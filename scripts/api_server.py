@@ -21,6 +21,7 @@
 设计原则：纯标准库、无框架、状态只落两个 JSON 文件；所有写盘都是「临时文件 + 原子替换」。
 """
 
+import datetime
 import hashlib
 import json
 import os
@@ -30,11 +31,15 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 FETCH = ROOT / "scripts" / "fetch_data.py"
+# 抓取进程的出口（国内机器的 SOCKS 隧道）。K 线/资金流接口仍走直连，别混用。
+FETCH_PROXY = os.environ.get("XIAOSAN_FETCH_PROXY", "socks5h://127.0.0.1:1080")
 DATA_JSON = ROOT / "data" / "radar_data.json"
 TOKEN_FILE = ROOT / "data" / ".refresh_token"        # 可选：刷新接口口令
 USERS_FILE = ROOT / "data" / "users.json"            # 账号 + 各自的自选
@@ -48,6 +53,7 @@ ALLOW_ORIGINS = [o.strip() for o in os.environ.get(
     "https://xiaosanlab.online,https://www.xiaosanlab.online").split(",") if o.strip()]
 
 WL_MAX_CODES = 300          # 单个账号最多存多少只
+WL_MAX_LEDGER = 6000        # 记账字典上限（全市场也才 5920 只）
 LOGIN_MAX_PER_HOUR = 30     # 单 IP 每小时登录/注册尝试上限（挡暴力猜密码）
 
 LOCK = threading.RLock()
@@ -101,8 +107,20 @@ def decide(now, history, running, window_ok, window_why, origin_ok, token_ok):
 
 def run_fetch():
     t0 = time.time()
-    p = subprocess.run([sys.executable, str(FETCH), "--force"], cwd=str(ROOT),
-                       capture_output=True, text=True, timeout=RUN_TIMEOUT)
+    # 🩸 必须给抓取脚本传一个**小于自身超时**的时间预算：
+    #    上游被限流时，抓取会自动重试到时间预算为止（见 fetch_data.py 的 FETCH_BUDGET_S）；
+    #    若用默认 300 秒，会被这里的 RUN_TIMEOUT 掐掉 → 用户拿到 504 且这次进度白跑。
+    #    （进度其实已落盘，但让请求优雅返回更好。）
+    budget = max(60, RUN_TIMEOUT - 30)
+    # 🩸 2026-11-06：香港出口被东财 push2 整站 502，抓取必须走国内机器的 SOCKS 隧道。
+    #    代理只注入给这个子进程 —— 不能放在服务级 Environment 里：
+    #    本文件的 K 线接口用的是 urllib，它不认 socks5h，服务级设置会让 /api/kline 直接 503。
+    env = dict(os.environ)
+    env["HTTPS_PROXY"] = env["HTTP_PROXY"] = FETCH_PROXY
+    env["NO_PROXY"] = "127.0.0.1,localhost"
+    p = subprocess.run([sys.executable, str(FETCH), "--force", "--budget", str(budget)],
+                       cwd=str(ROOT), capture_output=True, text=True, timeout=RUN_TIMEOUT,
+                       env=env)
     took = int((time.time() - t0) * 1000)
     return p.returncode, took, (p.stdout or "")[-1500:], (p.stderr or "")[-500:]
 
@@ -152,6 +170,24 @@ def _clean_codes(codes):
             seen.add(c); out.append(c)
         if len(out) >= WL_MAX_CODES:
             break
+    return out
+
+
+def _clean_ledger(d):
+    """成本价 / 持仓：{6位代码: 正数}。非法键值直接丢掉，不做猜测。"""
+    out = {}
+    if not isinstance(d, dict):
+        return out
+    for k, v in list(d.items())[:WL_MAX_LEDGER]:
+        k = str(k).strip()
+        if not re.fullmatch(r"\d{6}", k):
+            continue
+        try:
+            n = float(v)
+        except (TypeError, ValueError):
+            continue
+        if n > 0 and n == n and n not in (float("inf"), float("-inf")):
+            out[k] = round(n, 3)
     return out
 
 
@@ -216,25 +252,50 @@ def logout_user(tok):
     return hit
 
 
-def get_codes(name):
+def get_account(name):
+    """返回整包账号数据：codes / costs / holds / ledger_ts / updated"""
     with LOCK:
         u = _load_users().get(name) or {}
-        return _clean_codes(u.get("codes")), u.get("updated")
+        return (_clean_codes(u.get("codes")),
+                u.get("costs") or {},
+                u.get("holds") or {},
+                int(u.get("ledger_ts") or 0),
+                u.get("updated"))
 
 
-def put_codes(name, codes):
-    """返回 (codes, updated)；若内容没变则不写盘"""
+def put_account(name, codes, costs=None, holds=None):
+    """写入自选与记账。返回 (codes, costs, holds, ledger_ts, updated) 或 None。
+
+    ⚠️ costs/holds 传 None = **不改动**（老客户端只发 codes，不能把记账清空）。
+    """
     clean = _clean_codes(codes)
     with LOCK:
         users = _load_users()
         u = users.get(name)
         if not u:
-            return None, None
+            return None
+        changed = False
+        now_ms = int(time.time() * 1000)
         if u.get("codes") != clean:
             u["codes"] = clean
-            u["updated"] = int(time.time() * 1000)
+            u["updated"] = now_ms
+            changed = True
+        if costs is not None:
+            c = _clean_ledger(costs)
+            if u.get("costs") != c:
+                u["costs"] = c
+                u["ledger_ts"] = now_ms
+                changed = True
+        if holds is not None:
+            h = _clean_ledger(holds)
+            if u.get("holds") != h:
+                u["holds"] = h
+                u["ledger_ts"] = now_ms
+                changed = True
+        if changed:
             _save_users(users)
-        return u.get("codes") or [], u.get("updated")
+        return (u.get("codes") or [], u.get("costs") or {}, u.get("holds") or {},
+                int(u.get("ledger_ts") or 0), u.get("updated"))
 
 
 def login_allowed(ip, now=None):
@@ -248,6 +309,415 @@ def login_allowed(ip, now=None):
         hits.append(now)
         LOGIN_HITS[ip] = hits
     return True
+
+
+# ── K 线（点击股票名 → 日/周/月/季/年）────────────────────────────
+# 浏览器直连 push2his 会被跨域拦掉，所以由这里代理；顺便做缓存与限流。
+KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+KLINE_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"),
+    "Referer": "https://quote.eastmoney.com/",
+}
+KLINE_KL = {"day": 101, "week": 102, "month": 103}   # 东财不直接给季/年，由月K聚合
+KLINE_PERIODS = ("day", "week", "month", "quarter", "year")
+KLINE_LIMIT = 320          # 月K 320 根 ≈ 26 年，聚合成年K也够长
+KLINE_TTL = 300            # 同票同周期 5 分钟内复用（来回切周期不重复打源）
+KLINE_MAX_PER_MIN = 60     # 单 IP 每分钟上限
+KLINE_TIMEOUT = 12
+
+_KCACHE = {}               # (code, period) -> (ts, payload)
+_KHITS = {}                # ip -> [ts, ...]
+_KCLOCK = threading.Lock()
+
+
+class KlineError(Exception):
+    """取不到 K 线时抛这个，调用方转成 503。**绝不返回编造的数据**。"""
+
+
+def kline_secid(code):
+    """6 位代码 → 东财 secid。900xxx 是沪市B股(1.)，920xxx 是北交所(0.)。"""
+    c = str(code).strip()
+    if c[:3] == "920":
+        return "0." + c
+    return ("1." if c[:1] in ("6", "9") else "0.") + c
+
+
+def parse_kline_line(line):
+    """东财一行：日期,开,收,高,低,量(手),额(元),振幅,涨跌幅,涨跌额,换手率
+
+    输出：[日期, 开, 收, 高, 低, 量, 额, 涨跌幅%, 振幅%, 换手率%]
+    （涨跌幅/振幅互换到固定位置，前端不用记东财的字段次序）
+    """
+    f = str(line).split(",")
+    if len(f) < 7:
+        return None
+
+    def num(i, nd=3):
+        try:
+            return round(float(f[i]), nd)
+        except (TypeError, ValueError, IndexError):
+            return None
+
+    return [f[0][:10], num(1), num(2), num(3), num(4),
+            num(5, 0), num(6, 2),
+            num(8, 2),      # 位置 7 = 涨跌幅 f59
+            num(7, 2),      # 位置 8 = 振幅   f58
+            num(10, 2)]     # 位置 9 = 换手率 f61
+
+
+def _kline_request(secid, klt, limit):
+    q = {
+        # 🩸 fqt 必须是 0（不复权）。用前复权(fqt=1)时，长期高分红股（茅台就是）
+        #    的历史价会被累计分红扣成**负数** —— 季K/年K 一眼看过去最低价是 -207 元，
+        #    纵轴跨过 0，整张图失去意义。不复权的代价只是除权日有个缺口，
+        #    但价格是真的、和页面现价对得上。
+        "secid": secid, "klt": str(klt), "fqt": "0", "lmt": str(limit), "end": "20500101",
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+    }
+    url = KLINE_URL + "?" + urllib.parse.urlencode(q)
+    last = None
+    for _ in range(2):
+        try:
+            req = urllib.request.Request(url, headers=KLINE_HEADERS)
+            with urllib.request.urlopen(req, timeout=KLINE_TIMEOUT) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            data = payload.get("data") or {}
+            return data.get("name") or "", data.get("klines") or []
+        except Exception as e:                       # noqa: BLE001
+            last = e
+            time.sleep(0.6)
+    raise KlineError("行情源暂时不可用（%s）" % type(last).__name__)
+
+
+def _merge_months(bucket):
+    first, last = bucket[0], bucket[-1]
+    highs = [r[3] for r in bucket if r[3] is not None]
+    lows = [r[4] for r in bucket if r[4] is not None]
+    return [last[0], first[1], last[2],
+            max(highs) if highs else None,
+            min(lows) if lows else None,
+            round(sum(r[5] or 0 for r in bucket), 0),
+            round(sum(r[6] or 0 for r in bucket), 2),
+            None, None,
+            round(sum(r[9] or 0 for r in bucket), 2)]
+
+
+def aggregate_kline(rows, months):
+    """月K → 季K(months=3) / 年K(months=12)。
+
+    🩸 涨跌幅必须按「上一个聚合周期的收盘」重算：直接沿用期内最后一个月K的涨跌幅，
+       得到的是那个月的涨幅，不是整季/整年的（会差出好几倍，且看起来很正常）。
+    """
+    out, bucket, key = [], [], None
+    for r in rows:
+        try:
+            y, m = int(r[0][:4]), int(r[0][5:7])
+        except (ValueError, TypeError):
+            continue
+        k = (y, (m - 1) // months)
+        if bucket and k != key:
+            out.append(_merge_months(bucket))
+            bucket = []
+        key = k
+        bucket.append(r)
+    if bucket:
+        out.append(_merge_months(bucket))
+
+    prev = None
+    for r in out:
+        if prev is not None and prev > 0:
+            r[7] = round((r[2] / prev - 1) * 100, 2)
+            r[8] = round((r[3] - r[4]) / prev * 100, 2)
+        prev = r[2]
+    return out
+
+
+def _period_end(date_str, period):
+    """这一根 K 线覆盖周期的最后一天（判断「本期还没走完」用）"""
+    try:
+        d = datetime.date(int(date_str[:4]), int(date_str[5:7]), int(date_str[8:10]))
+    except (ValueError, TypeError, IndexError):
+        return date_str
+    if period == "week":
+        d = d + datetime.timedelta(days=6 - d.weekday())
+    elif period == "month":
+        d = datetime.date(d.year + (d.month == 12), (d.month % 12) + 1, 1) - datetime.timedelta(days=1)
+    elif period == "quarter":
+        qm = ((d.month - 1) // 3 + 1) * 3
+        d = datetime.date(d.year + (qm == 12), (qm % 12) + 1, 1) - datetime.timedelta(days=1)
+    elif period == "year":
+        d = datetime.date(d.year, 12, 31)
+    return d.strftime("%Y-%m-%d")
+
+
+def build_kline(code, period):
+    """返回该股该周期的 K 线。命中缓存直接给，取不到抛 KlineError。"""
+    key = (code, period)
+    now = time.time()
+    with _KCLOCK:
+        hit = _KCACHE.get(key)
+        if hit and now - hit[0] < KLINE_TTL:
+            return dict(hit[1], cached=True)
+
+    klt = KLINE_KL.get(period, 103)
+    name, lines = _kline_request(kline_secid(code), klt, KLINE_LIMIT)
+    rows = [x for x in (parse_kline_line(s) for s in lines) if x]
+    if not rows:
+        raise KlineError("这个代码没有 K 线数据（可能已退市或长期停牌）")
+    if period in ("quarter", "year"):
+        rows = aggregate_kline(rows, 3 if period == "quarter" else 12)
+    if not rows:
+        raise KlineError("聚合后没有有效数据")
+
+    # 服务器时区可能是 UTC，统一按北京时间判断「本期是否走完」
+    today = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d")
+    payload = {
+        "ok": True, "code": code, "name": name or code, "period": period,
+        "rows": rows,
+        "partial": _period_end(rows[-1][0], period) >= today,
+        "as_of": rows[-1][0],
+        "source": "eastmoney push2his · 不复权",
+    }
+    with _KCLOCK:
+        _KCACHE[key] = (now, payload)
+        if len(_KCACHE) > 2000:                      # 简单防涨
+            for k in list(_KCACHE)[:500]:
+                _KCACHE.pop(k, None)
+    return payload
+
+
+def _kline_throttle(ip):
+    now = time.time()
+    with _KCLOCK:
+        hits = [t for t in _KHITS.get(ip, []) if now - t < 60]
+        if len(hits) >= KLINE_MAX_PER_MIN:
+            _KHITS[ip] = hits
+            return False
+        hits.append(now)
+        _KHITS[ip] = hits
+        if len(_KHITS) > 5000:
+            _KHITS.clear()
+        return True
+
+
+# ── 个股资金流历史（四档净额）──────────────────────────────────
+# 🩸 这个接口无视 klt/lmt：不管传 102/103 还是 lmt=1200，**永远只回最近 120 个交易日的日线**。
+#    所以周/月/季/年必须自己聚合，而且「历史上限约半年」要如实告诉用户。
+FLOW_URL = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"
+FLOW_TTL = 300
+_FLCACHE = {}
+_FLCLOCK = threading.Lock()
+
+
+def parse_flow_line(line):
+    """东财：日期,主力,小单,中单,大单,超大单,主力占比,...
+
+    返回 [日期, 主力, 小单, 中单, 大单, 超大单]（元）。
+    校验：超大 + 大 = 主力；小 + 中 ≈ −主力（四档近似守恒）。
+    """
+    f = str(line).split(",")
+    if len(f) < 6:
+        return None
+
+    def num(i):
+        try:
+            return round(float(f[i]), 0)
+        except (TypeError, ValueError, IndexError):
+            return 0.0
+
+    return [f[0][:10], num(1), num(2), num(3), num(4), num(5)]
+
+
+def _flow_group_key(date_str, period):
+    """与 K 线同规则的周期分组键（便于和价格序列按日期对齐）"""
+    try:
+        y, m, d = int(date_str[:4]), int(date_str[5:7]), int(date_str[8:10])
+    except (ValueError, TypeError, IndexError):
+        return None
+    if period == "day":
+        return (y, m, d)
+    if period == "week":
+        iso = datetime.date(y, m, d).isocalendar()
+        return (iso[0], iso[1])
+    if period == "month":
+        return (y, m)
+    if period == "quarter":
+        return (y, (m - 1) // 3 + 1)
+    return (y,)
+
+
+def _merge_flow(bucket):
+    return [bucket[-1][0]] + [round(sum(x[i] for x in bucket), 0) for i in range(1, 6)]
+
+
+def aggregate_flow(rows, period):
+    """日线 → 周/月/季/年：净额是流量指标，按周期**求和**（取平均是错的）。"""
+    if period == "day" or not rows:
+        return rows
+    out, bucket, key = [], [], None
+    for r in rows:
+        k = _flow_group_key(r[0], period)
+        if bucket and k != key:
+            out.append(_merge_flow(bucket))
+            bucket = []
+        key = k
+        bucket.append(r)
+    if bucket:
+        out.append(_merge_flow(bucket))
+    return out
+
+
+def _flow_request(secid):
+    q = {
+        "lmt": "0", "klt": "101", "secid": secid,
+        "fields1": "f1,f2,f3,f7",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+    }
+    url = FLOW_URL + "?" + urllib.parse.urlencode(q)
+    last = None
+    for _ in range(2):
+        try:
+            req = urllib.request.Request(url, headers=KLINE_HEADERS)
+            with urllib.request.urlopen(req, timeout=KLINE_TIMEOUT) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            return (payload.get("data") or {}).get("klines") or []
+        except Exception as e:                       # noqa: BLE001
+            last = e
+            time.sleep(0.6)
+    raise KlineError("资金流源暂时不可用（%s）" % type(last).__name__)
+
+
+def build_flow(code, period):
+    key = (code, period)
+    now = time.time()
+    with _FLCLOCK:
+        hit = _FLCACHE.get(key)
+        if hit and now - hit[0] < FLOW_TTL:
+            return dict(hit[1], cached=True)
+
+    lines = _flow_request(kline_secid(code))
+    rows = [x for x in (parse_flow_line(s) for s in lines) if x]
+    if not rows:
+        raise KlineError("这个代码没有资金流历史（可能已退市或长期停牌）")
+    n_day = len(rows)
+    rows = aggregate_flow(rows, period)
+    payload = {
+        "ok": True, "code": code, "period": period, "rows": rows,
+        "days": n_day,          # 上游只给 120 个交易日 —— 前端据此说明「能画多长」
+        "unit": "元",
+        "as_of": rows[-1][0],
+        "source": "eastmoney push2his · 个股资金流",
+    }
+    with _FLCLOCK:
+        _FLCACHE[key] = (now, payload)
+        if len(_FLCACHE) > 2000:
+            for k in list(_FLCACHE)[:500]:
+                _FLCACHE.pop(k, None)
+    return payload
+
+
+# ── 个股多期财报（还原单季）────────────────────────────────────
+FIN_HTTP = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+FIN_TTL = 3600
+_FINCACHE = {}
+_FINCLOCK = threading.Lock()
+
+
+def restore_single_quarter(raw):
+    """累计 → 单季。raw 必须是按 (年,月) 升序的 [{y,m,date,rev,np,roe,gross}]。
+
+    Q1 本身就是单季；Q2/Q3/Q4 各减上一期。缺上一期时给 None —— 宁可空着，
+    也不要拿「本期累计」冒充「本期单季」。
+    """
+    by_q = {(x["y"], x["m"]): x for x in raw}
+    rows = []
+    for x in raw:
+        prev_m = {6: 3, 9: 6, 12: 9}.get(x["m"])
+        prev = by_q.get((x["y"], prev_m)) if prev_m else None
+        ok_pair = (prev is not None) or x["m"] == 3
+        rev_q = (x["rev"] - (prev["rev"] if prev else 0)) if ok_pair else None
+        np_q = (x["np"] - (prev["np"] if prev else 0)) if ok_pair else None
+        rows.append({
+            "period": "%dQ%d" % (x["y"], (x["m"] - 1) // 3 + 1),
+            "date": x["date"],
+            "rev_q": round(rev_q / 1e8, 2) if rev_q is not None else None,
+            "np_q": round(np_q / 1e8, 2) if np_q is not None else None,
+            "roe": round(float(x["roe"]), 2) if x.get("roe") is not None else None,
+            "gross": round(float(x["gross"]), 2) if x.get("gross") is not None else None,
+        })
+    return rows
+
+
+def fetch_fin_history(code, n=12):
+    """近 n 期财报，并把**累计值还原成单季**。
+
+    🩸 A 股利润表是年初至今累计：茅台 Q3 营收 1332 亿里含着 H1 的 922 亿。
+       直接按累计画柱状图，看到的是一条阶梯（Q1 < H1 < Q3），毫无信息量。
+       单季 = 本期累计 − 上一期累计；Q1 本身即单季。
+    """
+    key = (code, n)
+    now = time.time()
+    with _FINCLOCK:
+        hit = _FINCACHE.get(key)
+        if hit and now - hit[0] < FIN_TTL:
+            return dict(hit[1], cached=True)
+
+    params = {
+        "reportName": "RPT_LICO_FN_CPD",
+        "columns": ("SECURITY_CODE,SECURITY_NAME_ABBR,REPORTDATE,"
+                    "TOTAL_OPERATE_INCOME,PARENT_NETPROFIT,WEIGHTAVG_ROE,XSMLL"),
+        "pageSize": str(max(4, min(n, 40))), "pageNumber": "1",
+        "sortColumns": "REPORTDATE", "sortTypes": "-1",
+        "filter": '(SECURITY_CODE="%s")' % code,
+        "source": "WEB", "client": "WEB",
+    }
+    url = FIN_HTTP + "?" + urllib.parse.urlencode(params)
+    try:
+        req = urllib.request.Request(url, headers=KLINE_HEADERS)
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:                           # noqa: BLE001
+        raise KlineError("财报源暂时不可用（%s）" % type(e).__name__)
+
+    data = ((payload.get("result") or {}).get("data")) or []
+    raw = []
+    for r in data:
+        d = str(r.get("REPORTDATE") or "")[:10]
+        if len(d) < 10:
+            continue
+        try:
+            y, m = int(d[:4]), int(d[5:7])
+        except ValueError:
+            continue
+        if m not in (3, 6, 9, 12):
+            continue
+        raw.append({
+            "y": y, "m": m, "date": d,
+            "rev": float(r.get("TOTAL_OPERATE_INCOME") or 0),
+            "np": float(r.get("PARENT_NETPROFIT") or 0),
+            "roe": r.get("WEIGHTAVG_ROE"),
+            "gross": r.get("XSMLL"),
+        })
+    if not raw:
+        raise KlineError("这个代码没有财报数据")
+    raw.sort(key=lambda x: (x["y"], x["m"]))
+
+    rows = restore_single_quarter(raw)
+
+    out = {
+        "ok": True, "code": code, "rows": rows[-n:],
+        "unit_rev": "亿元（单季）", "unit_roe": "%（年初至今累计）",
+        "source": "eastmoney datacenter · 业绩报表",
+        "note": "营收/净利已还原为单季；ROE 与毛利率仍是年初至今累计口径",
+    }
+    with _FINCLOCK:
+        _FINCACHE[key] = (now, out)
+        if len(_FINCACHE) > 3000:
+            for k in list(_FINCACHE)[:500]:
+                _FINCACHE.pop(k, None)
+    return out
 
 
 # ── HTTP 层 ─────────────────────────────────────────────────────
@@ -313,6 +783,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._refresh_status()
         if r == "/api/watchlist":
             return self._watchlist_get()
+        if r == "/api/kline":
+            return self._kline_get()
+        if r == "/api/flow":
+            return self._flow_get()
+        if r == "/api/fin":
+            return self._fin_get()
         return self._send(404, {"ok": False, "message": "not found"})
 
     def do_POST(self):
@@ -331,6 +807,70 @@ class Handler(BaseHTTPRequestHandler):
         if self.route == "/api/watchlist":
             return self._watchlist_put()
         return self._send(404, {"ok": False, "message": "not found"})
+
+    # ---- K 线 ----
+    def _kline_get(self):
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        code = (q.get("code") or [""])[0].strip()
+        period = (q.get("period") or ["day"])[0].strip().lower()
+        if not re.fullmatch(r"\d{6}", code):
+            return self._send(400, {"ok": False, "message": "code 必须是 6 位数字"})
+        if period not in KLINE_PERIODS:
+            return self._send(400, {"ok": False,
+                                    "message": "period 只能是 " + "/".join(KLINE_PERIODS)})
+        if not _kline_throttle(self.client_address[0]):
+            return self._send(429, {"ok": False, "message": "点得太快了，稍等一下再试"})
+        try:
+            payload = build_kline(code, period)
+        except KlineError as e:
+            return self._send(503, {"ok": False, "message": str(e)})
+        except Exception as e:                       # noqa: BLE001
+            return self._send(500, {"ok": False,
+                                    "message": "生成 K 线失败（%s）" % type(e).__name__})
+        return self._send(200, payload)
+
+    # ---- 个股资金流 ----
+    def _flow_get(self):
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        code = (q.get("code") or [""])[0].strip()
+        period = (q.get("period") or ["day"])[0].strip().lower()
+        if not re.fullmatch(r"\d{6}", code):
+            return self._send(400, {"ok": False, "message": "code 必须是 6 位数字"})
+        if period not in KLINE_PERIODS:
+            return self._send(400, {"ok": False,
+                                    "message": "period 只能是 " + "/".join(KLINE_PERIODS)})
+        if not _kline_throttle(self.client_address[0]):
+            return self._send(429, {"ok": False, "message": "点得太快了，稍等一下再试"})
+        try:
+            payload = build_flow(code, period)
+        except KlineError as e:
+            return self._send(503, {"ok": False, "message": str(e)})
+        except Exception as e:                       # noqa: BLE001
+            return self._send(500, {"ok": False,
+                                    "message": "生成资金流失败（%s）" % type(e).__name__})
+        return self._send(200, payload)
+
+    # ---- 个股财报历史 ----
+    def _fin_get(self):
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        code = (q.get("code") or [""])[0].strip()
+        try:
+            n = int((q.get("n") or ["12"])[0])
+        except ValueError:
+            n = 12
+        n = max(4, min(n, 24))
+        if not re.fullmatch(r"\d{6}", code):
+            return self._send(400, {"ok": False, "message": "code 必须是 6 位数字"})
+        if not _kline_throttle(self.client_address[0]):
+            return self._send(429, {"ok": False, "message": "点得太快了，稍等一下再试"})
+        try:
+            payload = fetch_fin_history(code, n)
+        except KlineError as e:
+            return self._send(503, {"ok": False, "message": str(e)})
+        except Exception as e:                       # noqa: BLE001
+            return self._send(500, {"ok": False,
+                                    "message": "取财报失败（%s）" % type(e).__name__})
+        return self._send(200, payload)
 
     # ---- 刷新 ----
     def _refresh_status(self):
@@ -435,20 +975,29 @@ class Handler(BaseHTTPRequestHandler):
         name = self._require_user()
         if not name:
             return
-        codes, updated = get_codes(name)
-        return self._send(200, {"ok": True, "user": name, "codes": codes, "updated": updated})
+        codes, costs, holds, ledger_ts, updated = get_account(name)
+        return self._send(200, {"ok": True, "user": name, "codes": codes,
+                                "costs": costs, "holds": holds,
+                                "ledger_ts": ledger_ts, "updated": updated})
 
     def _watchlist_put(self):
         name = self._require_user()
         if not name:
             return
-        b = self._json_body() or {}
+        # 记账字典比只发 codes 大得多（300 只 × 成本+持仓 ≈ 10KB），默认 64KB 留足余量
+        b = self._json_body(limit=512 * 1024) or {}
         if not isinstance(b.get("codes"), list):
             return self._send(400, {"ok": False, "message": "codes 必须是数组"})
-        codes, updated = put_codes(name, b["codes"])
-        if codes is None:
+        # costs / holds 可选：不传就保持服务端原值（老版本前端只发 codes）
+        costs = b.get("costs") if isinstance(b.get("costs"), dict) else None
+        holds = b.get("holds") if isinstance(b.get("holds"), dict) else None
+        r = put_account(name, b["codes"], costs, holds)
+        if r is None:
             return self._send(401, {"ok": False, "message": "登录已失效，请重新登录"})
-        return self._send(200, {"ok": True, "user": name, "codes": codes, "updated": updated})
+        codes, costs_out, holds_out, ledger_ts, updated = r
+        return self._send(200, {"ok": True, "user": name, "codes": codes,
+                                "costs": costs_out, "holds": holds_out,
+                                "ledger_ts": ledger_ts, "updated": updated})
 
 
 def main():
